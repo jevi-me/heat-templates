@@ -1,14 +1,16 @@
 heat_template_version: 2015-04-30
 
-description: '''Deploy Kubernetes on a CoreOS cluster that operates on an
+description: '''
+  Deploy Kubernetes on a CoreOS cluster that operates on an
   OpenStack Powered Cloud.'''
 
 parameters:
+
   flavor:
     description: Flavor used for instances
     label: Flavor
     type: string
-    default: p2-3gb
+    default: p1-1.5gb
     hidden: false
     constraints:
     - custom_constraint: nova.flavor
@@ -23,7 +25,7 @@ parameters:
     - custom_constraint: glance.image
     description: Must be a valid Glance image
 
-  kubernetes_minion_count:
+  k8s_node_count:
     description: Number of machines to deploy as a Kubernetes Minion
     label: Kubernetes Minion Count
     type: number
@@ -39,7 +41,7 @@ parameters:
     description: Name of keypair to be used for instance
     label: Key Pair
     type: string
-    default: JeviKey  #TODO UPDATE THIS
+    default: dtnode_key
     hidden: false
     constraints: 
     - custom_constraint: nova.keypair
@@ -56,80 +58,95 @@ parameters:
     description: WestGrid project network
     label: Network
     type: string
+    default: jwe-314_network
     hidden: false
     constraints:
     - custom_constraint: neutron.network
     description: Must be a valid Neutron Network.
 
 resources:
-  discovery_node:
+
+  master_config:
+    type: OS::Heat::SoftwareConfig 
+
+  minion_config:
+    type: OS::Heat::SoftwareConfig 
+
+  bastion_node:
     type: OS::Nova::Server
     properties:
-      key_name: { get_param: keyname }
+      name: bastion_node
       image:    { get_param: image   }
       flavor:   { get_param: flavor  }
-      name: discovery_node
+      key_name: { get_param: keyname }
       networks: 
-      - network: {get_param: network_resource}
-      scheduler_hints: { group: { get_resource: policy_group }}
+      - network: { get_param: network_resource }
+      scheduler_hints: { group: { get_resource: server_group } }
+      metadata: 
+        kube_group: bastion
 
-  kubernetes_master_node:
+  etcd:
     type: OS::Nova::Server
     properties:
-      key_name: { get_param: keyname }
+      name: etcd
       image:    { get_param: image   }
       flavor:   { get_param: flavor  }
-      name: kubernetes_master
+      key_name: { get_param: keyname }
       networks: 
-      - network: {get_param: network_resource}
-      scheduler_hints: { group: { get_resource: policy_group }}
+      - network: { get_param: network_resource }
+      scheduler_hints: { group: { get_resource: server_group } }
+      metadata: 
+        kube_group: etcd,nofloating
 
-  overlord_node:
+  k8s_master:
     type: OS::Nova::Server
     properties:
-      key_name: { get_param: keyname }
+      name: k8s_master
       image:    { get_param: image   }
       flavor:   { get_param: flavor  }
-      name: kubernetes_master
+      key_name: { get_param: keyname }
       networks: 
-      - network: {get_param: network_resource}
-      scheduler_hints: { group: { get_resource: policy_group }}
+      - network: { get_param: network_resource }
+      scheduler_hints: { group: { get_resource: server_group } }
+      metadata: 
+        kube_group: k8scluster,vault,nofloating
 
-  kubernetes_minions: 
+  k8s_node:
     type: OS::Heat::AutoScalingGroup
     properties:
       min_size: 1
-      desired_capacity: { get_param: kubernetes_minion_count }
+      desired_capacity: { get_param: k8s_node_count }
       max_size: 6
       resource:
         type: OS::Nova::Server
         properties:
-          key_name: { get_param: keyname }
+          name: k8s_node
           image:    { get_param: image   }
           flavor:   { get_param: flavor  }
-          name: kubernetes_minion
+          key_name: { get_param: keyname }
           networks: 
-          - network: {get_param: network_resource}
-          scheduler_hints: { group: { get_resource: policy_group }}
+          - network: { get_param: network_resource }
+          scheduler_hints: { group: { get_resource: server_group } }
+          metadata: 
+            kube_group: k8snode,k8scluster,nofloating
 
-  policy_group:
+  server_group:
     type: OS::Nova::ServerGroup
     properties:
       name: nova-server-group
-      #policies: [affinity]
 
   scale_up_policy:
     type: OS::Heat::ScalingPolicy
     properties:
       adjustment_type: change_in_capacity
-      auto_scaling_group_id: { get_resource: kubernetes_minions }
+      auto_scaling_group_id: { get_resource: k8s_node }
       cooldown: 60
-      scaling_adjustment: 1
+      scaling_adjustment: '1'
 
   scale_down_policy:
     type: OS::Heat::ScalingPolicy
     properties:
       adjustment_type: change_in_capacity
-      auto_scaling_group_id: { get_resource: kubernetes_minions }
+      auto_scaling_group_id: { get_resource: k8s_node }
       cooldown: 60
       scaling_adjustment: '-1'
