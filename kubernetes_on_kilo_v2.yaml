@@ -66,16 +66,76 @@ parameters:
 
 resources:
 
-  master_config:
-    type: OS::Heat::SoftwareConfig 
+  install_dependencies:
+    type: OS::Heat::SoftwareConfig
+    properties:
+      group: ungrouped
+      config: |
+        #!/bin/bash -x
+        cat /etc/hostname
+        cat /etc/hosts
+        sudo apt-get update && apt-get install -y apt-transport-https
+        sudo apt install docker.io
+        sudo systemctl start docker
+        sudo systemctl enable docker
 
-  minion_config:
-    type: OS::Heat::SoftwareConfig 
+  install_kubernetes:
+    type: OS::Heat::SoftwareConfig
+    properties:
+      group: ungrouped
+      config: |
+        #!/bin/sh -x
+        sudo curl -s https://packages.cloud.google.com/apt/doc/apt-key.gpg | apt-key add 
+        deb http://apt.kubernetes.io/ kubernetes-xenial main 
+        apt-get update
+        apt-get install -y kubelet kubeadm kubectl kubernetes-cni
 
-  bastion_node:
+  initialise_master:
+    type: OS::Heat::SoftwareConfig
+    properties:
+      group: ungrouped
+      config: |
+        #!/bin/sh -x
+        sudo kubeadm init
+        mkdir -p $HOME/.kube
+        sudo cp -i /etc/kubernetes/admin.conf $HOME/.kube/config
+        sudo chown $(id -u):$(id -g) $HOME/.kube/config
+        sudo kubectl apply -f https://raw.githubusercontent.com/coreos/flannel/master/Documentation/kube-flannel.yml
+        sudo kubectl apply -f https://raw.githubusercontent.com/coreos/flannel/master/Documentation/k8s-manifests/kube-flannel-rbac.yml
+
+  config_master:
+    type: OS::Heat::MultipartMime
+    properties:
+      parts:
+      - config: {get_resource: install_dependencies}
+      - config: {get_resource: install_kubernetes}
+      - config: {get_resource: initialise_master}
+
+  config_minion:
+    type: OS::Heat::MultipartMime
+    properties:
+      parts:
+      - config: {get_resource: install_dependencies}
+      - config: {get_resource: install_kubernetes}
+
+  config_bastion:
+    type: OS::Heat::MultipartMime
+    properties:
+      parts:
+      - config: {get_resource: install_dependencies}
+      - config: {get_resource: install_kubernetes}
+
+  config_etcd:
+    type: OS::Heat::MultipartMime
+    properties:
+      parts:
+      - config: {get_resource: install_dependencies}
+      - config: {get_resource: install_kubernetes}
+
+  bastion:
     type: OS::Nova::Server
     properties:
-      name: bastion_node
+      name: bastion
       image:    { get_param: image   }
       flavor:   { get_param: flavor  }
       key_name: { get_param: keyname }
@@ -84,6 +144,8 @@ resources:
       scheduler_hints: { group: { get_resource: server_group } }
       metadata: 
         kube_group: bastion
+      user_data_format: SOFTWARE_CONFIG
+      user_data: {get_resource: config_bastion}
 
   etcd:
     type: OS::Nova::Server
@@ -97,6 +159,8 @@ resources:
       scheduler_hints: { group: { get_resource: server_group } }
       metadata: 
         kube_group: etcd,nofloating
+      user_data_format: SOFTWARE_CONFIG
+      user_data: {get_resource: config_etcd}
 
   k8s_master:
     type: OS::Nova::Server
@@ -110,6 +174,8 @@ resources:
       scheduler_hints: { group: { get_resource: server_group } }
       metadata: 
         kube_group: k8scluster,vault,nofloating
+      user_data_format: SOFTWARE_CONFIG
+      user_data: {get_resource: config_master}
 
   k8s_node:
     type: OS::Heat::AutoScalingGroup
@@ -120,7 +186,7 @@ resources:
       resource:
         type: OS::Nova::Server
         properties:
-          name: k8s_node
+          name: k8s_node_%index%
           image:    { get_param: image   }
           flavor:   { get_param: flavor  }
           key_name: { get_param: keyname }
@@ -129,6 +195,8 @@ resources:
           scheduler_hints: { group: { get_resource: server_group } }
           metadata: 
             kube_group: k8snode,k8scluster,nofloating
+          user_data_format: SOFTWARE_CONFIG
+          user_data: {get_resource: config_minion}
 
   server_group:
     type: OS::Nova::ServerGroup
