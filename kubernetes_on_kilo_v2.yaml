@@ -172,12 +172,24 @@ resources:
         sudo dnf -y install etcd
         echo ">> ... END install etcd"
 
-  write_heat_params:
+  add_ons:
+    type: OS::Heat::SoftwareConfig
+    properties:
+      group: ungrouped
+      config: |
+        #!/bin/bash
+        kubectl apply -f https://raw.githubusercontent.com/kubernetes/dashboard/master/src/deploy/recommended/kubernetes-dashboard.yaml
+        kubectl apply -f https://raw.githubusercontent.com/giantswarm/kubernetes-prometheus/master/manifests-all.yaml
+        kubectl get all --all-namespaces=true
+
+
+  write_heat_params-master:
     type: OS::Heat::SoftwareConfig
     properties:
       group: ungrouped
       config: |
         #cloud-config
+        merge_how: dict(recurse_array)+list(append)
         write_files:
         - path: /etc/sysconfig/heat-params
           owner: "root:root"
@@ -186,8 +198,24 @@ resources:
             KUBE_ALLOW_PRIV="FALSE"
             FLANNEL_NETWORK_CIDR="10.0.0.0/24"
             FLANNEL_NETWORK_SUBNETLEN="24"
-            FLANNEL_USE_VXLAN="TRUE"
+            FLANNEL_USE_VXLAN="FALSE"
             PORTAL_NETWORK_CIDR="10.254.0.0/16"
+
+  write_heat_params:
+    type: OS::Heat::SoftwareConfig
+    properties:
+      group: ungrouped
+      config: |
+        #cloud-config
+        merge_how: dict(recurse_array)+list(append)
+        write_files:
+        - path: /etc/sysconfig/heat-params
+          owner: "root:root"
+          permissions: "0644"
+          content: |
+            KUBE_ALLOW_PRIV="FALSE"
+            #KUBE_MASTER_IP="$KUBE_MASTER_IP"
+            #DOCKER_VOLUME="$DOCKER_VOLUME"
 
   atomic_upgrade:
     type: OS::Heat::SoftwareConfig
@@ -195,6 +223,7 @@ resources:
       group: ungrouped
       config: |
         #cloud-config
+        merge_how: dict(recurse_array)+list(append)
         bootcmd:
           - |
         test -f /etc/upgrade-flag ||
@@ -330,6 +359,7 @@ resources:
       group: ungrouped
       config: |
         #cloud-config
+        merge_how: dict(recurse_array)+list(append)
         write_files:
           - path: /usr/local/bin/flannel-config
             owner: "root:root"
@@ -406,6 +436,7 @@ resources:
       group: ungrouped
       config: |
         #cloud-config
+        merge_how: dict(recurse_array)+list(append)
         write_files:
           - path: /etc/kubernetes/examples/web.replica
             owner: "root:root"
@@ -475,26 +506,6 @@ resources:
                         image: larsks/stress
                         args: ["--cpu", "1"]
 
-  master_wc_notify:
-    type: OS::Heat::SoftwareConfig
-    properties:
-      group: ungrouped
-      config: |
-        #!/bin/bash -v
-        #wc_notify --data-binary '{"status": "SUCCESS"}'
-        #params:
-        #wc_notify: {get_attr: [master_wait_handle, curl_cli]}
-
-  node_wc_notify:
-    type: OS::Heat::SoftwareConfig
-    properties:
-      group: ungrouped
-      config: |
-        #!/bin/bash -v
-        #wc_notify --data-binary '{"status": "SUCCESS"}'
-        #params:
-        #wc_notify: {get_attr: [node_wait_handle, curl_cli]}
-
   disable_selinux:
     type: OS::Heat::SoftwareConfig
     properties:
@@ -511,6 +522,7 @@ resources:
       group: ungrouped
       config: |
         #cloud-config
+        merge_how: dict(recurse_array)+list(append)
         bootcmd:
           - mkdir -p /etc/systemd/system/docker.service.d
           - mkdir -p /etc/systemd/system/flanneld.service.d
@@ -567,6 +579,7 @@ resources:
       group: ungrouped
       config: |
         #cloud-config
+        merge_how: dict(recurse_array)+list(append)
         write_files:
           - path: /usr/local/bin/kube-register
             permissions: "0755"
@@ -624,7 +637,7 @@ resources:
         - config: {get_resource: atomic_upgrade}
         - config: {get_resource: install_kubernetes}
         - config: {get_resource: install_etcd}
-        - config: {get_resource: write_heat_params}
+        - config: {get_resource: write_heat_params-master}
         - config: {get_resource: checkpoint}
         - config: {get_resource: configure_etcd}
         - config: {get_resource: checkpoint}
@@ -640,11 +653,12 @@ resources:
         - config: {get_resource: checkpoint}
         - config: {get_resource: kube_examples}
         - config: {get_resource: checkpoint}
-        - config: {get_resource: master_wc_notify}
-        - config: {get_resource: checkpoint}
+        - config: {get_resource: kube_dt}
+        - config: {get_resource: add_ons}
 
   kube_node_init:
     type: OS::Heat::MultipartMime
+    depends_on: k8s_master
     properties:
       parts:
         - config: {get_resource: disable_selinux}
@@ -658,7 +672,7 @@ resources:
         - config: {get_resource: configure_kubernetes_node}
         - config: {get_resource: docker_service}
         - config: {get_resource: enable_services}
-        - config: {get_resource: node_wc_notify}
+        - config: {get_resource: add_ons}
 
   k8s_master:
     type: OS::Nova::Server
@@ -723,7 +737,7 @@ resources:
       config: |
         #cloud-config
         write_files:
-          - path: /etc/kubernetes/dt/context.claim
+          - path: /etc/kubernetes/dt/context_claim.yaml
             owner: "root:root"
             permissions: "0644"
             content: |
@@ -741,7 +755,7 @@ resources:
                   requests:
                     storage: 100Mi
               status: {}
-          - path: /etc/kubernetes/dt/context.deployment
+          - path: /etc/kubernetes/dt/context_deployment.yaml
             owner: "root:root"
             permissions: "0644"
             content: |
@@ -780,7 +794,7 @@ resources:
                       persistentVolumeClaim:
                         claimName: context-claim0
               status: {}
-          - path: /etc/kubernetes/dt/context.service
+          - path: /etc/kubernetes/dt/context_service.yaml
             owner: "root:root"
             permissions: "0644"
             content: |
@@ -803,7 +817,7 @@ resources:
                   io.kompose.service: context
               status:
                 loadBalancer: {}             
-          - path: /etc/kubernetes/dt/identity.deployment
+          - path: /etc/kubernetes/dt/identity_deployment.yaml
             owner: "root:root"
               permissions: "0644"
               content: |
@@ -860,7 +874,7 @@ resources:
                       resources: {}
                     restartPolicy: Always
               status: {}
-          - path: /etc/kubernetes/dt/identity.service
+          - path: /etc/kubernetes/dt/identity_service.yaml
             owner: "root:root"
               permissions: "0644"
               content: |
@@ -883,7 +897,7 @@ resources:
                     io.kompose.service: identity
                 status:
                   loadBalancer: {}
-          - path: /etc/kubernetes/dt/ipfs.deployment
+          - path: /etc/kubernetes/dt/ipfs_deployment.yaml
             owner: "root:root"
               permissions: "0644"
               content: |
@@ -914,7 +928,7 @@ resources:
                         resources: {}
                       restartPolicy: Always
                 status: {}
-          - path: /etc/kubernetes/dt/ipfs.service
+          - path: /etc/kubernetes/dt/ipfs_service.yaml
             owner: "root:root"
               permissions: "0644"
               content: |
@@ -937,7 +951,7 @@ resources:
                     io.kompose.service: ipfs
                 status:
                   loadBalancer: {}              
-          - path: /etc/kubernetes/dt/patchbay.deployment
+          - path: /etc/kubernetes/dt/patchbay_deployment
             owner: "root:root"
               permissions: "0644"
               content: |
@@ -1000,8 +1014,8 @@ resources:
                         resources: {}
                       restartPolicy: Always
                 status: {}
-          - path: /etc/kubernetes/dt/patchbay.service
-            owner: "root:root"
+          - path: /etc/kubernetes/dt/patchbay_service.yaml
+              owner: "root:root"
               permissions: "0644"
               content: |
                 apiVersion: v1
@@ -1023,36 +1037,36 @@ resources:
                     io.kompose.service: patchbay
                 status:
                   loadBalancer: {}
-          - path: /etc/kubernetes/dt/postgres.deployment
-            owner: "root:root"
-              permissions: "0644"
-              content: |
-                apiVersion: extensions/v1beta1
-                kind: Deployment
-                metadata:
-                  annotations:
-                    kompose.cmd: kompose convert -f /Users/imac/Desktop/untitled folder/docker-compose.yml
-                    kompose.version: 1.16.0 ()
-                  creationTimestamp: null
-                  labels:
-                    io.kompose.service: postgres
-                  name: postgres
-                spec:
-                  replicas: 1
-                  strategy: {}
-                  template:
-                    metadata:
-                      creationTimestamp: null
-                      labels:
-                        io.kompose.service: postgres
-                    spec:
-                      containers:
-                      - image: postgres:9.6-alpine
-                        name: postgres
-                        resources: {}
-                      restartPolicy: Always
-                status: {}
-          - path: /etc/kubernetes/dt/rabbitmq.deployment
+          - path: /etc/kubernetes/dt/postgres_deployment.yaml
+              owner: "root:root"
+                permissions: "0644"
+                content: |
+                  apiVersion: extensions/v1beta1
+                  kind: Deployment
+                  metadata:
+                    annotations:
+                      kompose.cmd: kompose convert -f /Users/imac/Desktop/untitled folder/docker-compose.yml
+                      kompose.version: 1.16.0 ()
+                    creationTimestamp: null
+                    labels:
+                      io.kompose.service: postgres
+                    name: postgres
+                  spec:
+                    replicas: 1
+                    strategy: {}
+                    template:
+                      metadata:
+                        creationTimestamp: null
+                        labels:
+                          io.kompose.service: postgres
+                      spec:
+                        containers:
+                        - image: postgres:9.6-alpine
+                          name: postgres
+                          resources: {}
+                        restartPolicy: Always
+                  status: {}
+          - path: /etc/kubernetes/dt/rabbitmq_deployment.yaml
             owner: "root:root"
               permissions: "0644"
               content: |
@@ -1084,7 +1098,7 @@ resources:
                         resources: {}
                       restartPolicy: Always
                 status: {}
-          - path: /etc/kubernetes/dt/rabbitmq.service
+          - path: /etc/kubernetes/dt/rabbitmq_service.yaml
             owner: "root:root"
               permissions: "0644"
               content: |
@@ -1110,7 +1124,7 @@ resources:
                     io.kompose.service: rabbitmq
                 status:
                   loadBalancer: {}
-          - path: /etc/kubernetes/dt/redis.deployment
+          - path: /etc/kubernetes/dt/redis_deployment.yaml
             owner: "root:root"
               permissions: "0644"
               content: |
@@ -1141,7 +1155,7 @@ resources:
                         resources: {}
                       restartPolicy: Always
                 status: {}
-          - path: /etc/kubernetes/dt/redis.service
+          - path: /etc/kubernetes/dt/redis_service.yaml
             owner: "root:root"
               permissions: "0644"
               content: |
@@ -1164,7 +1178,7 @@ resources:
                     io.kompose.service: redis
                 status:
                   loadBalancer: {}
-          - path: /etc/kubernetes/dt/task-mgmt.deployment
+          - path: /etc/kubernetes/dt/task-mgmt_deployment.yaml
             owner: "root:root"
               permissions: "0644"
               content: |
@@ -1221,29 +1235,29 @@ resources:
                         resources: {}
                       restartPolicy: Always
                 status: {}
-          - path: /etc/kubernetes/dt/task-mgmt.service
-            owner: "root:root"
-              permissions: "0644"
-              content: |
-                apiVersion: v1
-                kind: Service
-                metadata:
-                  annotations:
-                    kompose.cmd: kompose convert -f /Users/imac/Desktop/untitled folder/docker-compose.yml
-                    kompose.version: 1.16.0 ()
-                  creationTimestamp: null
-                  labels:
-                    io.kompose.service: task-mgmt
-                  name: task-mgmt
-                spec:
-                  ports:
-                  - name: "3400"
-                    port: 3400
-                    targetPort: 3400
-                  - name: "4400"
-                    port: 4400
-                    targetPort: 4400
-                  selector:
-                    io.kompose.service: task-mgmt
-                status:
-                  loadBalancer: {}
+          - path: /etc/kubernetes/dt/task-mgmt_service.yaml
+              owner: "root:root"
+                permissions: "0644"
+                content: |
+                  apiVersion: v1
+                  kind: Service
+                  metadata:
+                    annotations:
+                      kompose.cmd: kompose convert -f /Users/imac/Desktop/untitled folder/docker-compose.yml
+                      kompose.version: 1.16.0 ()
+                    creationTimestamp: null
+                    labels:
+                      io.kompose.service: task-mgmt
+                    name: task-mgmt
+                  spec:
+                    ports:
+                    - name: "3400"
+                      port: 3400
+                      targetPort: 3400
+                    - name: "4400"
+                      port: 4400
+                      targetPort: 4400
+                    selector:
+                      io.kompose.service: task-mgmt
+                  status:
+                    loadBalancer: {}
