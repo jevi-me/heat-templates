@@ -561,9 +561,6 @@ resources:
               [Install]
               Also=flannel-docker-bridge.service
 
-
-
-
   kube_register:
     type: "OS::Heat::SoftwareConfig"
     properties:
@@ -718,3 +715,535 @@ resources:
       auto_scaling_group_id: { get_resource: k8s_node }
       cooldown: {get_param: scale_down_cooldown}
       scaling_adjustment: -1
+
+  kube_dt:
+    type: OS::Heat::SoftwareConfig
+    properties:
+      group: ungrouped
+      config: |
+        #cloud-config
+        write_files:
+          - path: /etc/kubernetes/dt/context.claim
+            owner: "root:root"
+            permissions: "0644"
+            content: |
+              apiVersion: v1
+              kind: PersistentVolumeClaim
+              metadata:
+                creationTimestamp: null
+                labels:
+                  io.kompose.service: context-claim0
+                name: context-claim0
+              spec:
+                accessModes:
+                - ReadWriteOnce
+                resources:
+                  requests:
+                    storage: 100Mi
+              status: {}
+          - path: /etc/kubernetes/dt/context.deployment
+            owner: "root:root"
+            permissions: "0644"
+            content: |
+              apiVersion: extensions/v1beta1
+              kind: Deployment
+              metadata:
+                annotations:
+                  kompose.cmd: kompose convert -f /Users/imac/Desktop/untitled folder/docker-compose.yml
+                  kompose.version: 1.16.0 ()
+                creationTimestamp: null
+                labels:
+                  io.kompose.service: context
+                name: context
+              spec:
+                replicas: 1
+                strategy:
+                  type: Recreate
+                template:
+                  metadata:
+                    creationTimestamp: null
+                    labels:
+                      io.kompose.service: context
+                  spec:
+                    containers:
+                    - image: context
+                      name: context
+                      ports:
+                      - containerPort: 4000
+                      resources: {}
+                      volumeMounts:
+                      - mountPath: /home/context/src
+                        name: context-claim0
+                    restartPolicy: Always
+                    volumes:
+                    - name: context-claim0
+                      persistentVolumeClaim:
+                        claimName: context-claim0
+              status: {}
+          - path: /etc/kubernetes/dt/context.service
+            owner: "root:root"
+            permissions: "0644"
+            content: |
+              apiVersion: v1
+              kind: Service
+              metadata:
+                annotations:
+                  kompose.cmd: kompose convert -f /Users/imac/Desktop/untitled folder/docker-compose.yml
+                  kompose.version: 1.16.0 ()
+                creationTimestamp: null
+                labels:
+                  io.kompose.service: context
+                name: context
+              spec:
+                ports:
+                - name: "4000"
+                  port: 4000
+                  targetPort: 4000
+                selector:
+                  io.kompose.service: context
+              status:
+                loadBalancer: {}             
+          - path: /etc/kubernetes/dt/identity.deployment
+            owner: "root:root"
+              permissions: "0644"
+              content: |
+              apiVersion: extensions/v1beta1
+              kind: Deployment
+              metadata:
+                annotations:
+                  kompose.cmd: kompose convert -f /Users/imac/Desktop/untitled folder/docker-compose.yml
+                  kompose.version: 1.16.0 ()
+                creationTimestamp: null
+                labels:
+                  io.kompose.service: identity
+                name: identity
+              spec:
+                replicas: 1
+                strategy: {}
+                template:
+                  metadata:
+                    creationTimestamp: null
+                    labels:
+                      io.kompose.service: identity
+                  spec:
+                    containers:
+                    - env:
+                      - name: ALLOWED_ORIGINS
+                        value: http://localhost:3000
+                      - name: GOLANG_ENV
+                        value: develop
+                      - name: PORT
+                        value: "3100"
+                      - name: POSTGRES_DB_URL
+                        value: postgres://postgres@postgres/postgres?sslmode=disable
+                      - name: PRIVATE_KEY
+                        value: |
+                          -----BEGIN RSA PRIVATE KEY-----
+                          MIIBOwIBAAJBAMOsqD9mC5mWC4Fa5rTU3Zaq+ZWIgEzwC0nkkPMLVAfJpkFI7uiy
+                          CIj5n6OuPCDGNJTzXMjJsBd1YhUqzg2XnAsCAwEAAQJAF8Qoy0qBri3jR9ramqwg
+                          HeS2W8swiie9t0PjtyFxG2DUP6ENDgodWzrA+WJD5dJSlkWUlwgCUJ3jk/vK3eOJ
+                          AQIhAOi5Y0dUpR8GVQX7YeIDug4N39T2FnYxB1XdH5GKX/fxAiEA1z6oRREeTGTL
+                          ULZYRkyz41tVC+uCTGeUw1i9UMi8b7sCIQDRP49CXZsx8BGWlVaHT26EoHj3FGVR
+                          0/eSfoWZ6N8tIQIhAI2y6gPN6SxRjqdr42EkTah3D93xBK5X4k9XtAninGrRAiB7
+                          k4uJgqHl8hgs3bndGibFuepdLWJed7YXa+eF57FdmA==
+                          -----END RSA PRIVATE KEY-----
+                      - name: PUBLIC_KEY
+                        value: |
+                          -----BEGIN PUBLIC KEY-----
+                          MFwwDQYJKoZIhvcNAQEBBQADSwAwSAJBAMOsqD9mC5mWC4Fa5rTU3Zaq+ZWIgEzw
+                          C0nkkPMLVAfJpkFI7uiyCIj5n6OuPCDGNJTzXMjJsBd1YhUqzg2XnAsCAwEAAQ==
+                          -----END PUBLIC KEY-----
+                      image: datatogether/identity:latest
+                      name: identity
+                      ports:
+                      - containerPort: 3100
+                      resources: {}
+                    restartPolicy: Always
+              status: {}
+          - path: /etc/kubernetes/dt/identity.service
+            owner: "root:root"
+              permissions: "0644"
+              content: |
+                apiVersion: v1
+                kind: Service
+                metadata:
+                  annotations:
+                    kompose.cmd: kompose convert -f /Users/imac/Desktop/untitled folder/docker-compose.yml
+                    kompose.version: 1.16.0 ()
+                  creationTimestamp: null
+                  labels:
+                    io.kompose.service: identity
+                  name: identity
+                spec:
+                  ports:
+                  - name: "3100"
+                    port: 3100
+                    targetPort: 3100
+                  selector:
+                    io.kompose.service: identity
+                status:
+                  loadBalancer: {}
+          - path: /etc/kubernetes/dt/ipfs.deployment
+            owner: "root:root"
+              permissions: "0644"
+              content: |
+                apiVersion: extensions/v1beta1
+                kind: Deployment
+                metadata:
+                  annotations:
+                    kompose.cmd: kompose convert -f /Users/imac/Desktop/untitled folder/docker-compose.yml
+                    kompose.version: 1.16.0 ()
+                  creationTimestamp: null
+                  labels:
+                    io.kompose.service: ipfs
+                  name: ipfs
+                spec:
+                  replicas: 1
+                  strategy: {}
+                  template:
+                    metadata:
+                      creationTimestamp: null
+                      labels:
+                        io.kompose.service: ipfs
+                    spec:
+                      containers:
+                      - image: ipfs/go-ipfs:latest
+                        name: ipfs
+                        ports:
+                        - containerPort: 5001
+                        resources: {}
+                      restartPolicy: Always
+                status: {}
+          - path: /etc/kubernetes/dt/ipfs.service
+            owner: "root:root"
+              permissions: "0644"
+              content: |
+                apiVersion: v1
+                kind: Service
+                metadata:
+                  annotations:
+                    kompose.cmd: kompose convert -f /Users/imac/Desktop/untitled folder/docker-compose.yml
+                    kompose.version: 1.16.0 ()
+                  creationTimestamp: null
+                  labels:
+                    io.kompose.service: ipfs
+                  name: ipfs
+                spec:
+                  ports:
+                  - name: "5001"
+                    port: 5001
+                    targetPort: 5001
+                  selector:
+                    io.kompose.service: ipfs
+                status:
+                  loadBalancer: {}              
+          - path: /etc/kubernetes/dt/patchbay.deployment
+            owner: "root:root"
+              permissions: "0644"
+              content: |
+                apiVersion: extensions/v1beta1
+                kind: Deployment
+                metadata:
+                  annotations:
+                    kompose.cmd: kompose convert -f /Users/imac/Desktop/untitled folder/docker-compose.yml
+                    kompose.version: 1.16.0 ()
+                  creationTimestamp: null
+                  labels:
+                    io.kompose.service: patchbay
+                  name: patchbay
+                spec:
+                  replicas: 1
+                  strategy: {}
+                  template:
+                    metadata:
+                      creationTimestamp: null
+                      labels:
+                        io.kompose.service: patchbay
+                    spec:
+                      containers:
+                      - env:
+                        - name: GOLANG_ENV
+                          value: develop
+                        - name: PORT
+                          value: "3000"
+                        - name: POSTGRES_DB_URL
+                          value: postgres://postgres@postgres/postgres?sslmode=disable
+                        - name: PRIVATE_KEY
+                          value: |
+                            -----BEGIN RSA PRIVATE KEY-----
+                            MIIBOwIBAAJBAMOsqD9mC5mWC4Fa5rTU3Zaq+ZWIgEzwC0nkkPMLVAfJpkFI7uiy
+                            CIj5n6OuPCDGNJTzXMjJsBd1YhUqzg2XnAsCAwEAAQJAF8Qoy0qBri3jR9ramqwg
+                            HeS2W8swiie9t0PjtyFxG2DUP6ENDgodWzrA+WJD5dJSlkWUlwgCUJ3jk/vK3eOJ
+                            AQIhAOi5Y0dUpR8GVQX7YeIDug4N39T2FnYxB1XdH5GKX/fxAiEA1z6oRREeTGTL
+                            ULZYRkyz41tVC+uCTGeUw1i9UMi8b7sCIQDRP49CXZsx8BGWlVaHT26EoHj3FGVR
+                            0/eSfoWZ6N8tIQIhAI2y6gPN6SxRjqdr42EkTah3D93xBK5X4k9XtAninGrRAiB7
+                            k4uJgqHl8hgs3bndGibFuepdLWJed7YXa+eF57FdmA==
+                            -----END RSA PRIVATE KEY-----
+                        - name: PUBLIC_KEY
+                          value: |
+                            -----BEGIN PUBLIC KEY-----
+                            MFwwDQYJKoZIhvcNAQEBBQADSwAwSAJBAMOsqD9mC5mWC4Fa5rTU3Zaq+ZWIgEzw
+                            C0nkkPMLVAfJpkFI7uiyCIj5n6OuPCDGNJTzXMjJsBd1YhUqzg2XnAsCAwEAAQ==
+                            -----END PUBLIC KEY-----
+                        - name: REDIS_URL
+                          value: redis:6379
+                        - name: TASKS_SERVICE_URL
+                          value: task-mgmt:4400
+                        - name: TITLE
+                          value: Data Together
+                        - name: WEBAPP_SCRIPTS
+                          value: http://localhost:4000/static/bundle.js
+                        image: datatogether/patchbay:latest
+                        name: patchbay
+                        ports:
+                        - containerPort: 3000
+                        resources: {}
+                      restartPolicy: Always
+                status: {}
+          - path: /etc/kubernetes/dt/patchbay.service
+            owner: "root:root"
+              permissions: "0644"
+              content: |
+                apiVersion: v1
+                kind: Service
+                metadata:
+                  annotations:
+                    kompose.cmd: kompose convert -f /Users/imac/Desktop/untitled folder/docker-compose.yml
+                    kompose.version: 1.16.0 ()
+                  creationTimestamp: null
+                  labels:
+                    io.kompose.service: patchbay
+                  name: patchbay
+                spec:
+                  ports:
+                  - name: "3000"
+                    port: 3000
+                    targetPort: 3000
+                  selector:
+                    io.kompose.service: patchbay
+                status:
+                  loadBalancer: {}
+          - path: /etc/kubernetes/dt/postgres.deployment
+            owner: "root:root"
+              permissions: "0644"
+              content: |
+                apiVersion: extensions/v1beta1
+                kind: Deployment
+                metadata:
+                  annotations:
+                    kompose.cmd: kompose convert -f /Users/imac/Desktop/untitled folder/docker-compose.yml
+                    kompose.version: 1.16.0 ()
+                  creationTimestamp: null
+                  labels:
+                    io.kompose.service: postgres
+                  name: postgres
+                spec:
+                  replicas: 1
+                  strategy: {}
+                  template:
+                    metadata:
+                      creationTimestamp: null
+                      labels:
+                        io.kompose.service: postgres
+                    spec:
+                      containers:
+                      - image: postgres:9.6-alpine
+                        name: postgres
+                        resources: {}
+                      restartPolicy: Always
+                status: {}
+          - path: /etc/kubernetes/dt/rabbitmq.deployment
+            owner: "root:root"
+              permissions: "0644"
+              content: |
+                apiVersion: extensions/v1beta1
+                kind: Deployment
+                metadata:
+                  annotations:
+                    kompose.cmd: kompose convert -f /Users/imac/Desktop/untitled folder/docker-compose.yml
+                    kompose.version: 1.16.0 ()
+                  creationTimestamp: null
+                  labels:
+                    io.kompose.service: rabbitmq
+                  name: rabbitmq
+                spec:
+                  replicas: 1
+                  strategy: {}
+                  template:
+                    metadata:
+                      creationTimestamp: null
+                      labels:
+                        io.kompose.service: rabbitmq
+                    spec:
+                      containers:
+                      - image: library/rabbitmq:latest
+                        name: rabbitmq
+                        ports:
+                        - containerPort: 5672
+                        - containerPort: 15672
+                        resources: {}
+                      restartPolicy: Always
+                status: {}
+          - path: /etc/kubernetes/dt/rabbitmq.service
+            owner: "root:root"
+              permissions: "0644"
+              content: |
+                apiVersion: v1
+                kind: Service
+                metadata:
+                  annotations:
+                    kompose.cmd: kompose convert -f /Users/imac/Desktop/untitled folder/docker-compose.yml
+                    kompose.version: 1.16.0 ()
+                  creationTimestamp: null
+                  labels:
+                    io.kompose.service: rabbitmq
+                  name: rabbitmq
+                spec:
+                  ports:
+                  - name: "5672"
+                    port: 5672
+                    targetPort: 5672
+                  - name: "15672"
+                    port: 15672
+                    targetPort: 15672
+                  selector:
+                    io.kompose.service: rabbitmq
+                status:
+                  loadBalancer: {}
+          - path: /etc/kubernetes/dt/redis.deployment
+            owner: "root:root"
+              permissions: "0644"
+              content: |
+                apiVersion: extensions/v1beta1
+                kind: Deployment
+                metadata:
+                  annotations:
+                    kompose.cmd: kompose convert -f /Users/imac/Desktop/untitled folder/docker-compose.yml
+                    kompose.version: 1.16.0 ()
+                  creationTimestamp: null
+                  labels:
+                    io.kompose.service: redis
+                  name: redis
+                spec:
+                  replicas: 1
+                  strategy: {}
+                  template:
+                    metadata:
+                      creationTimestamp: null
+                      labels:
+                        io.kompose.service: redis
+                    spec:
+                      containers:
+                      - image: library/redis:latest
+                        name: redis
+                        ports:
+                        - containerPort: 6379
+                        resources: {}
+                      restartPolicy: Always
+                status: {}
+          - path: /etc/kubernetes/dt/redis.service
+            owner: "root:root"
+              permissions: "0644"
+              content: |
+                apiVersion: v1
+                kind: Service
+                metadata:
+                  annotations:
+                    kompose.cmd: kompose convert -f /Users/imac/Desktop/untitled folder/docker-compose.yml
+                    kompose.version: 1.16.0 ()
+                  creationTimestamp: null
+                  labels:
+                    io.kompose.service: redis
+                  name: redis
+                spec:
+                  ports:
+                  - name: "6379"
+                    port: 6379
+                    targetPort: 6379
+                  selector:
+                    io.kompose.service: redis
+                status:
+                  loadBalancer: {}
+          - path: /etc/kubernetes/dt/task-mgmt.deployment
+            owner: "root:root"
+              permissions: "0644"
+              content: |
+                apiVersion: extensions/v1beta1
+                kind: Deployment
+                metadata:
+                  annotations:
+                    kompose.cmd: kompose convert -f /Users/imac/Desktop/untitled folder/docker-compose.yml
+                    kompose.version: 1.16.0 ()
+                  creationTimestamp: null
+                  labels:
+                    io.kompose.service: task-mgmt
+                  name: task-mgmt
+                spec:
+                  replicas: 1
+                  strategy: {}
+                  template:
+                    metadata:
+                      creationTimestamp: null
+                      labels:
+                        io.kompose.service: task-mgmt
+                    spec:
+                      containers:
+                      - env:
+                        - name: AMQP_URL
+                          value: amqp://guest:guest@rabbitmq:5672/
+                        - name: EMAIL_NOTIFICATION_RECIPIENTS
+                          value: brendan@qri.io
+                        - name: GITHUB_LOGIN_URL
+                          value: http://localhost:3100/oauth/github
+                        - name: GOLANG_ENV
+                          value: develop
+                        - name: IPFS_API_URL
+                          value: http://ipfs:5001/api/v0
+                        - name: PORT
+                          value: "3400"
+                        - name: POSTGRES_DB_URL
+                          value: postgres://postgres@postgres/postgres?sslmode=disable
+                        - name: POSTMARK_KEY
+                          value: POSTMARK_API_TEST
+                        - name: PUBLIC_KEY
+                          value: nothing_yet
+                        - name: REDIS_URL
+                          value: redis:6379
+                        - name: RPC_PORT
+                          value: "4400"
+                        - name: TLS
+                          value: "false"
+                        image: datatogether/task-mgmt:latest
+                        name: task-mgmt
+                        ports:
+                        - containerPort: 3400
+                        - containerPort: 4400
+                        resources: {}
+                      restartPolicy: Always
+                status: {}
+          - path: /etc/kubernetes/dt/task-mgmt.service
+            owner: "root:root"
+              permissions: "0644"
+              content: |
+                apiVersion: v1
+                kind: Service
+                metadata:
+                  annotations:
+                    kompose.cmd: kompose convert -f /Users/imac/Desktop/untitled folder/docker-compose.yml
+                    kompose.version: 1.16.0 ()
+                  creationTimestamp: null
+                  labels:
+                    io.kompose.service: task-mgmt
+                  name: task-mgmt
+                spec:
+                  ports:
+                  - name: "3400"
+                    port: 3400
+                    targetPort: 3400
+                  - name: "4400"
+                    port: 4400
+                    targetPort: 4400
+                  selector:
+                    io.kompose.service: task-mgmt
+                status:
+                  loadBalancer: {}
