@@ -144,15 +144,15 @@ parameters:
 
 resources:
 
-  #master_wait_handle:
-    #type: OS::Heat::WaitConditionHandle
+  master_wait_handle:
+    type: OS::Heat::WaitConditionHandle
 
-  #master_wait_condition:
-    #type: OS::Heat::WaitCondition
-    #depends_on: k8s_master
-    #properties:
-      #handle: {get_resource: master_wait_handle}
-      #timeout: {get_param: wait_condition_timeout}
+  master_wait_condition:
+    type: OS::Heat::WaitCondition
+    depends_on: k8s_master
+    properties:
+      handle: {get_resource: master_wait_handle}
+      timeout: {get_param: wait_condition_timeout}
 
   write_heat_params:
     type: OS::Heat::SoftwareConfig
@@ -465,7 +465,7 @@ resources:
       group: ungrouped
       config: |
         #!/bin/bash -v
-        #wc_notify --data-binary '{"status": "SUCCESS"}'
+        wc_notify --data-binary '{"status": "SUCCESS"}'
         #params:
         #wc_notify: {get_attr: [master_wait_handle, curl_cli]}
 
@@ -475,7 +475,7 @@ resources:
       group: ungrouped
       config: |
         #!/bin/bash -v
-        #wc_notify --data-binary '{"status": "SUCCESS"}'
+        wc_notify --data-binary '{"status": "SUCCESS"}'
         #params:
         #wc_notify: {get_attr: [node_wait_handle, curl_cli]}
 
@@ -722,31 +722,3 @@ resources:
       auto_scaling_group_id: { get_resource: k8s_node }
       cooldown: {get_param: scale_down_cooldown}
       scaling_adjustment: -1
-
-  cpu_alarm_high:
-    type: OS::Ceilometer::Alarm
-    properties:
-      description: Scale-up if the average CPU > <scale_up_threshold>% for 1 minute
-      meter_name: cpu_util
-      statistic: avg
-      period: {get_param: scale_up_period_length}
-      evaluation_periods: {get_param: scale_up_period_count}
-      threshold: {get_param: scale_up_threshold}
-      alarm_actions:
-        - {get_attr: [scale_up_policy, alarm_url]}
-      matching_metadata: {'metadata.user_metadata.stack': {get_param: "OS::stack_id"}}
-      comparison_operator: gt
-
-  cpu_alarm_low:
-    type: OS::Ceilometer::Alarm
-    properties:
-      description: Scale-down if the average CPU < <scale_down_threshold>% for 10 minutes
-      meter_name: cpu_util
-      statistic: avg
-      period: {get_param: scale_down_period_length}
-      evaluation_periods: {get_param: scale_down_period_count}
-      threshold: {get_param: scale_down_threshold}
-      alarm_actions:
-        - {get_attr: [scale_down_policy, alarm_url]}
-      matching_metadata: {'metadata.user_metadata.stack': {get_param: "OS::stack_id"}}
-      comparison_operator: lt
