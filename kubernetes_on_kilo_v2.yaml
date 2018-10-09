@@ -143,6 +143,13 @@ parameters:
     default: 60
 
 resources:
+  checkpoint:
+    type: OS::Heat::SoftwareConfig
+    properties:
+      group: ungrouped
+      config: |
+        #!/bin/bash
+        echo ">> CHECKPOINT!"
 
   install_kubernetes:
     type: OS::Heat::SoftwareConfig
@@ -150,8 +157,10 @@ resources:
       group: ungrouped
       config: |
         #!/bin/bash
-        echo ">> Installing Kubernetes ..."
+        echo ">> START install kubernetes and flanneld ..."
         sudo dnf -y install kubernetes
+        SUDO dnf -y install flannel
+        echo ">> ... END install kubernetes and flanneld"
 
   install_etcd:
     type: OS::Heat::SoftwareConfig
@@ -159,8 +168,9 @@ resources:
       group: ungrouped
       config: |
         #!/bin/bash
-        echo ">> Installing ETCD ..."        
+        echo ">> START etcd ..."        
         sudo dnf -y install etcd
+        echo ">> ... END install etcd"
 
   write_heat_params:
     type: OS::Heat::SoftwareConfig
@@ -208,6 +218,7 @@ resources:
         ETCD_LISTEN_CLIENT_URLS="http://0.0.0.0:4001"
         [cluster]
         ETCD_ADVERTISE_CLIENT_URLS="http://$myip:4001"
+        
         EOF
 
   configure_docker_storage:
@@ -369,7 +380,7 @@ resources:
         #!/bin/sh
         # make sure we pick up any modified unit files
         systemctl daemon-reload
-        echo starting services
+        echo ">> Starting services"
         for service in etcd kube-apiserver kube-scheduler kube-controller-manager flanneld kube-proxy; do
           echo "activating service $service"
           systemctl enable $service
@@ -617,27 +628,36 @@ resources:
     type: OS::Heat::MultipartMime
     properties:
       parts:
-        - config: {get_resource: install_kubernetes}
-        - config: {get_resource: install_etcd}
         - config: {get_resource: disable_selinux}
         - config: {get_resource: atomic_upgrade}
+        - config: {get_resource: install_kubernetes}
+        - config: {get_resource: install_etcd}
         - config: {get_resource: write_heat_params}
+        - config: {get_resource: checkpoint}
         - config: {get_resource: configure_etcd}
+        - config: {get_resource: checkpoint}
         - config: {get_resource: kube_user}
+        - config: {get_resource: checkpoint}
         - config: {get_resource: configure_kubernetes}
+        - config: {get_resource: checkpoint}
         - config: {get_resource: enable_services}
+        - config: {get_resource: checkpoint}
         - config: {get_resource: write_flannel_config}
+        - config: {get_resource: checkpoint}
         - config: {get_resource: flannel_config_service}
+        - config: {get_resource: checkpoint}
         - config: {get_resource: kube_examples}
+        - config: {get_resource: checkpoint}
         - config: {get_resource: master_wc_notify}
+        - config: {get_resource: checkpoint}
 
   kube_node_init:
     type: OS::Heat::MultipartMime
     properties:
       parts:
-        - config: {get_resource: install_kubernetes}
         - config: {get_resource: disable_selinux}
         - config: {get_resource: atomic_upgrade}
+        - config: {get_resource: install_kubernetes}
         - config: {get_resource: write_heat_params}
         - config: {get_resource: kube_user}
         - config: {get_resource: kube_examples}
