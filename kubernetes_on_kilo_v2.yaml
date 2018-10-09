@@ -144,15 +144,23 @@ parameters:
 
 resources:
 
-  #master_wait_handle:
-    #type: OS::Heat::WaitConditionHandle
+  install_kubernetes:
+    type: OS::Heat::SoftwareConfig
+    properties:
+      group: ungrouped
+      config: |
+        #!/bin/bash
+        echo ">> Installing Kubernetes ..."
+        sudo dnf -y install kubernetes
 
-  #master_wait_condition:
-    #type: OS::Heat::WaitCondition
-    #depends_on: k8s_master
-    #properties:
-      #handle: {get_resource: master_wait_handle}
-      #timeout: {get_param: wait_condition_timeout}
+  install_etcd:
+    type: OS::Heat::SoftwareConfig
+    properties:
+      group: ungrouped
+      config: |
+        #!/bin/bash
+        echo ">> Installing ETCD ..."        
+        sudo dnf -y install etcd
 
   write_heat_params:
     type: OS::Heat::SoftwareConfig
@@ -162,14 +170,14 @@ resources:
         #cloud-config
         write_files:
         - path: /etc/sysconfig/heat-params
-        owner: "root:root"
-        permissions: "0644"
-        content: |
-          KUBE_ALLOW_PRIV="FALSE"
-          FLANNEL_NETWORK_CIDR="10.0.0.0/24"
-          FLANNEL_NETWORK_SUBNETLEN="24"
-          FLANNEL_USE_VXLAN="FALSE"
-          PORTAL_NETWORK_CIDR="10.254.0.0/16"
+          owner: "root:root"
+          permissions: "0644"
+          content: |
+            KUBE_ALLOW_PRIV="FALSE"
+            FLANNEL_NETWORK_CIDR="10.0.0.0/24"
+            FLANNEL_NETWORK_SUBNETLEN="24"
+            FLANNEL_USE_VXLAN="FALSE"
+            PORTAL_NETWORK_CIDR="10.254.0.0/16"
 
   atomic_upgrade:
     type: OS::Heat::SoftwareConfig
@@ -609,6 +617,8 @@ resources:
     type: OS::Heat::MultipartMime
     properties:
       parts:
+        - config: {get_resource: install_kubernetes}
+        - config: {get_resource: install_etcd}
         - config: {get_resource: disable_selinux}
         - config: {get_resource: atomic_upgrade}
         - config: {get_resource: write_heat_params}
@@ -625,6 +635,7 @@ resources:
     type: OS::Heat::MultipartMime
     properties:
       parts:
+        - config: {get_resource: install_kubernetes}
         - config: {get_resource: disable_selinux}
         - config: {get_resource: atomic_upgrade}
         - config: {get_resource: write_heat_params}
@@ -636,36 +647,6 @@ resources:
         - config: {get_resource: docker_service}
         - config: {get_resource: enable_services}
         - config: {get_resource: node_wc_notify}
-
-  bastion:
-    type: OS::Nova::Server
-    properties:
-      name: bastion
-      image:    { get_param: image   }
-      flavor:   { get_param: flavor  }
-      key_name: { get_param: keyname }
-      networks: 
-      - network: { get_param: network_resource }
-      scheduler_hints: { group: { get_resource: server_group } }
-      metadata: 
-        kube_group: bastion
-      #user_data_format: SOFTWARE_CONFIG
-      #user_data: {get_resource: config_bastion}
-
-  etcd:
-    type: OS::Nova::Server
-    properties:
-      name: etcd
-      image:    { get_param: image   }
-      flavor:   { get_param: flavor  }
-      key_name: { get_param: keyname }
-      networks: 
-      - network: { get_param: network_resource }
-      scheduler_hints: { group: { get_resource: server_group } }
-      metadata: 
-        kube_group: etcd,nofloating
-      #user_data_format: SOFTWARE_CONFIG
-      #user_data: {get_resource: config_etcd}
 
   k8s_master:
     type: OS::Nova::Server
@@ -722,31 +703,3 @@ resources:
       auto_scaling_group_id: { get_resource: k8s_node }
       cooldown: {get_param: scale_down_cooldown}
       scaling_adjustment: -1
-
-  cpu_alarm_high:
-    type: OS::Ceilometer::Alarm
-    properties:
-      description: Scale-up if the average CPU > <scale_up_threshold>% for 1 minute
-      meter_name: cpu_util
-      statistic: avg
-      period: {get_param: scale_up_period_length}
-      evaluation_periods: {get_param: scale_up_period_count}
-      threshold: {get_param: scale_up_threshold}
-      alarm_actions:
-        - {get_attr: [scale_up_policy, alarm_url]}
-      matching_metadata: {'metadata.user_metadata.stack': {get_param: "OS::stack_id"}}
-      comparison_operator: gt
-
-  cpu_alarm_low:
-    type: OS::Ceilometer::Alarm
-    properties:
-      description: Scale-down if the average CPU < <scale_down_threshold>% for 10 minutes
-      meter_name: cpu_util
-      statistic: avg
-      period: {get_param: scale_down_period_length}
-      evaluation_periods: {get_param: scale_down_period_count}
-      threshold: {get_param: scale_down_threshold}
-      alarm_actions:
-        - {get_attr: [scale_down_policy, alarm_url]}
-      matching_metadata: {'metadata.user_metadata.stack': {get_param: "OS::stack_id"}}
-      comparison_operator: lt
