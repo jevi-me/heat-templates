@@ -143,6 +143,34 @@ parameters:
     default: 60
 
 resources:
+
+  disable_selinux:
+    type: OS::Heat::SoftwareConfig
+    properties:
+      group: ungrouped
+      config: |
+        #cloud-boothook
+        #!/bin/sh
+        echo ">> Start Disable SELINUX"
+        setenforce 0
+        sed -i '/^SELINUX=/ s/=.*/=permissive/' /etc/selinux/config
+        echo ">> ... END Disable SELINUX"
+
+  atomic_upgrade:
+    type: OS::Heat::SoftwareConfig
+    properties:
+      group: ungrouped
+      config: |
+        #cloud-config
+        merge_how: dict(recurse_array)+list(append)
+        bootcmd:
+          - |
+        test -f /etc/upgrade-flag ||
+        { rm -rf /var/lib/cloud/instances/*;
+        rpm-ostree upgrade > /var/log/ostree-upgrade.log 2>&1;
+        touch /etc/upgrade-flag;
+        reboot; }        
+
   checkpoint:
     type: OS::Heat::SoftwareConfig
     properties:
@@ -171,17 +199,6 @@ resources:
         echo ">> START etcd ..."        
         sudo dnf -y install etcd
         echo ">> ... END install etcd"
-
-  add_ons:
-    type: OS::Heat::SoftwareConfig
-    properties:
-      group: ungrouped
-      config: |
-        #!/bin/bash
-        kubectl apply -f https://raw.githubusercontent.com/kubernetes/dashboard/master/src/deploy/recommended/kubernetes-dashboard.yaml
-        kubectl apply -f https://raw.githubusercontent.com/giantswarm/kubernetes-prometheus/master/manifests-all.yaml
-        kubectl get all --all-namespaces=true
-
 
   write_heat_params-master:
     type: OS::Heat::SoftwareConfig
@@ -217,27 +234,13 @@ resources:
             #KUBE_MASTER_IP="$KUBE_MASTER_IP"
             #DOCKER_VOLUME="$DOCKER_VOLUME"
 
-  atomic_upgrade:
-    type: OS::Heat::SoftwareConfig
-    properties:
-      group: ungrouped
-      config: |
-        #cloud-config
-        merge_how: dict(recurse_array)+list(append)
-        bootcmd:
-          - |
-        test -f /etc/upgrade-flag ||
-        { rm -rf /var/lib/cloud/instances/*;
-        rpm-ostree upgrade > /var/log/ostree-upgrade.log 2>&1;
-        touch /etc/upgrade-flag;
-        reboot; }
-
   configure_etcd:
     type: OS::Heat::SoftwareConfig
     properties:
       group: ungrouped
       config: |
-        #!/bin/s
+        #!/bin/sh
+        echo ">> START Configure ETCD"
         myip=$(ip addr show eth0 |
         awk '$1 == "inet" {print $2}' | cut -f1 -d/)
         cat > /etc/etcd/etcd.conf <<'EOF'
@@ -248,31 +251,23 @@ resources:
         [cluster]
         ETCD_ADVERTISE_CLIENT_URLS="http://$myip:4001"
         EOF
+        echo ">> ... END Configure ETCD"
 
-  configure_docker_storage:
+  kube_user:
     type: OS::Heat::SoftwareConfig
     properties:
       group: ungrouped
       config: |
-        #!/bin/bash
-        . /etc/sysconfig/heat-params
-        DOCKER_DEV=/dev/disk/by-id/virtio-${DOCKER_VOLUME:0:20}
-        attempts=60
-        while [[ ! -b $DOCKER_DEV && $attempts != 0 ]]; do
-          echo "waiting for disk $DOCKER_DEV"
-          sleep 0.5
-          udevadm trigger
-          let attempts--
-        done
-        if ! [ -b $DOCKER_DEV ]; then
-          echo "ERROR: device $DOCKER_DEV does not exist" >&2
-          exit 1
-        fi
-        pvcreate $DOCKER_DEV
-        vgcreate docker $DOCKER_DEV
-        cat > /etc/sysconfig/docker-storage-setup <<'EOF'
-        VG=docker
-        EOF
+        #cloud-config
+        merge_how: dict(recurse_array)+list(append)
+        system_info:
+          default_user:
+            name: minion
+            lock_passwd: true
+            gecos: Kubernetes Interactive User
+            groups: [wheel, adm, systemd-journal]
+            sudo: ["ALL=(ALL) NOPASSWD:ALL"]
+            shell: /bin/bash
 
   configure_kubernetes:
     type: OS::Heat::SoftwareConfig
@@ -281,7 +276,7 @@ resources:
       config: |
         #!/bin/sh
         . /etc/sysconfig/heat-params
-        echo "configuring kubernetes (master)"
+        echo ">> Configuring kubernetes (master)"
         sed -i '
           /^KUBE_ALLOW_PRIV=/ s/=.*/="--allow_privileged='"$KUBE_ALLOW_PRIV"'"/
         ' /etc/kubernetes/config
@@ -292,6 +287,7 @@ resources:
         sed -i '
           /^KUBELET_ADDRESSES=/ s/=.*/="--machines='""'"/
         ' /etc/kubernetes/controller-manager
+        echo ">>  ... END Configuring kubernetes (master)"
 
   configure_kubernetes_node:
     type: OS::Heat::SoftwareConfig
@@ -300,7 +296,7 @@ resources:
       config: |
         #!/bin/sh
         . /etc/sysconfig/heat-params
-        echo "configuring kubernetes (minion)"
+        echo ">> Configuring Kubernetes (minion)"
         myip=$(ip addr show eth0 |
         awk '$1 == "inet" {print $2}' | cut -f1 -d/)
         myip_last_octet=${myip##*.}
@@ -321,6 +317,7 @@ resources:
           KUBERNETES_MASTER=http://$KUBE_MASTER_IP:8080
         EOF
         systemctl enable kube-register
+        echo ">> ... END Configuring Kubernetes (minion)"
 
   write_flannel_config:
     type: OS::Heat::SoftwareConfig
@@ -328,6 +325,7 @@ resources:
       group: ungrouped
       config: |
         #!/bin/sh
+        echo ">> Write Flannel Config"
         . /etc/sysconfig/heat-params
         . /etc/sysconfig/flanneld
         FLANNEL_JSON=/etc/sysconfig/flannel-network.json
@@ -352,6 +350,24 @@ resources:
         cat >> $FLANNEL_JSON <<'EOF'
         }
         EOF
+        echo ">> ... END Flannel Config"
+
+
+  enable_services:
+    type: OS::Heat::SoftwareConfig
+    properties:
+      group: ungrouped
+      config: |
+        #!/bin/sh
+        # make sure we pick up any modified unit files
+        systemctl daemon-reload
+        echo ">> Starting services"
+        for service in etcd kube-apiserver kube-scheduler kube-controller-manager flanneld kube-proxy; do
+          echo "activating service $service"
+          systemctl enable $service
+          systemctl --no-block start $service
+        done
+        echo ">> ... Completed starting services"
 
   flannel_config_service:
     type: OS::Heat::SoftwareConfig
@@ -366,21 +382,20 @@ resources:
             permissions: "0755"
             content: |
               #!/bin/sh
-              
+              echo ">> Starting Flannel Config"
               : ${FLANNEL_JSON:=/etc/sysconfig/flannel-network.json}
               if ! [ -f "$FLANNEL_JSON" ]; then
-                echo "ERROR: missing network configuration file" >&2
+                echo ">> ERROR: missing network configuration file" >&2
                 exit 1
               fi
               if ! [ "$FLANNEL_ETCD" ] && [ "$FLANNEL_ETCD_KEY" ]; then
-                echo "ERROR: missing required configuration" >&2
+                echo ">> ERROR: missing required configuration" >&2
                 exit 1
               fi
-              
-              echo "creating flanneld config in etcd"
+              echo ">> Creating flanneld config in etcd"
               while ! curl -sf -L $FLANNEL_ETCD/v2/keys${FLANNEL_ETCD_KEY}/config \
                 -X PUT --data-urlencode value@${FLANNEL_JSON}; do
-                  echo "waiting for etcd"
+                  echo ">> Waiting for etcd"
                   sleep 1
               done
           - path: /etc/systemd/system/flannel-config.service
@@ -400,35 +415,32 @@ resources:
           - systemctl enable flannel-config
           - systemctl start --no-block flannel-config
 
-  enable_services:
+  configure_docker_storage:
     type: OS::Heat::SoftwareConfig
     properties:
       group: ungrouped
       config: |
-        #!/bin/sh
-        # make sure we pick up any modified unit files
-        systemctl daemon-reload
-        echo ">> Starting services"
-        for service in etcd kube-apiserver kube-scheduler kube-controller-manager flanneld kube-proxy; do
-          echo "activating service $service"
-          systemctl enable $service
-          systemctl --no-block start $service
+        #!/bin/bash
+        echo ">> Configuring Docker Storage"
+        . /etc/sysconfig/heat-params
+        DOCKER_DEV=/dev/disk/by-id/virtio-${DOCKER_VOLUME:0:20}
+        attempts=60
+        while [[ ! -b $DOCKER_DEV && $attempts != 0 ]]; do
+          echo ">> Waiting for disk $DOCKER_DEV"
+          sleep 0.5
+          udevadm trigger
+          let attempts--
         done
-
-  kube_user:
-    type: OS::Heat::SoftwareConfig
-    properties:
-      group: ungrouped
-      config: |
-        #cloud-config
-        system_info:
-          default_user:
-            name: minion
-            lock_passwd: true
-            gecos: Kubernetes Interactive User
-            groups: [wheel, adm, systemd-journal]
-            sudo: ["ALL=(ALL) NOPASSWD:ALL"]
-            shell: /bin/bash
+        if ! [ -b $DOCKER_DEV ]; then
+          echo ">> ERROR: device $DOCKER_DEV does not exist" >&2
+          exit 1
+        fi
+        pvcreate $DOCKER_DEV
+        vgcreate docker $DOCKER_DEV
+        cat > /etc/sysconfig/docker-storage-setup <<'EOF'
+        VG=docker
+        EOF
+        echo ">> ... END Configuring Docker Storage"
 
   kube_examples:
     type: OS::Heat::SoftwareConfig
@@ -506,16 +518,6 @@ resources:
                         image: larsks/stress
                         args: ["--cpu", "1"]
 
-  disable_selinux:
-    type: OS::Heat::SoftwareConfig
-    properties:
-      group: ungrouped
-      config: |
-        #cloud-boothook
-        #!/bin/sh
-        setenforce 0
-        sed -i '/^SELINUX=/ s/=.*/=permissive/' /etc/selinux/config
-
   docker_service:
     type: OS::Heat::SoftwareConfig
     properties:
@@ -533,7 +535,7 @@ resources:
             content: |
               #!/bin/sh
               if ! [ "$FLANNEL_SUBNET" ] && [ "$FLANNEL_MTU" ] ; then
-                echo "ERROR: missing required environment variables." >&2
+                echo ">> ERROR: missing required environment variables." >&2
                 exit 1
               fi
               mkdir -p /run/flannel/
@@ -586,21 +588,20 @@ resources:
             owner: root
             content: |
               #!/bin/sh
-              
               . /etc/sysconfig/heat-params
               master_url=http://${KUBE_MASTER_IP}:8080
               myip=$(ip addr show eth0 |
                 awk '$1 == "inet" {print $2}' | cut -f1 -d/)
               # wait for master api
               until curl -o /dev/null -sf "${master_url}/healthz"; do
-                echo "waiting for kubernetes master"
+                echo ">> Waiting for kubernetes master"
                 sleep 1
               done
               if [ "$1" = "-u" ]; then
-              echo "unregistering minion $myip"
+              echo ">> Unregistering minion $myip"
               kubectl -s ${master_url} delete minion/$myip
               else
-              echo "registering minion $myip"
+              echo ">> Registering minion $myip"
               cpu=$(($(nproc) * 1000))
               memory=$(awk '/MemTotal: /{print $2 * 1024}' /proc/meminfo)
               cat <<'EOF' | kubectl create -s ${master_url} -f-
@@ -629,6 +630,18 @@ resources:
               [Install]
               WantedBy=kubelet.service
 
+  add_ons:
+    type: OS::Heat::SoftwareConfig
+    properties:
+      group: ungrouped
+      config: |
+        #!/bin/bash
+        echo ">> Applying Addons"
+        kubectl apply -f https://raw.githubusercontent.com/kubernetes/dashboard/master/src/deploy/recommended/kubernetes-dashboard.yaml
+        kubectl apply -f https://raw.githubusercontent.com/giantswarm/kubernetes-prometheus/master/manifests-all.yaml
+        kubectl get all --all-namespaces=true
+        echo ">> ... END Applying Addons"
+
   kube_master_init:
     type: OS::Heat::MultipartMime
     properties:
@@ -638,27 +651,18 @@ resources:
         - config: {get_resource: install_kubernetes}
         - config: {get_resource: install_etcd}
         - config: {get_resource: write_heat_params-master}
-        - config: {get_resource: checkpoint}
         - config: {get_resource: configure_etcd}
-        - config: {get_resource: checkpoint}
         - config: {get_resource: kube_user}
-        - config: {get_resource: checkpoint}
         - config: {get_resource: configure_kubernetes}
-        - config: {get_resource: checkpoint}
         - config: {get_resource: enable_services}
-        - config: {get_resource: checkpoint}
         - config: {get_resource: write_flannel_config}
-        - config: {get_resource: checkpoint}
         - config: {get_resource: flannel_config_service}
-        - config: {get_resource: checkpoint}
         - config: {get_resource: kube_examples}
-        - config: {get_resource: checkpoint}
-        - config: {get_resource: kube_dt}
         - config: {get_resource: add_ons}
+        - config: {get_resource: kube_dt}
 
   kube_node_init:
     type: OS::Heat::MultipartMime
-    depends_on: k8s_master
     properties:
       parts:
         - config: {get_resource: disable_selinux}
@@ -737,7 +741,7 @@ resources:
       config: |
         #cloud-config
         write_files:
-          - path: /etc/kubernetes/dt/context_claim.yaml
+          - path: /etc/kubernetes/dt/context.claim
             owner: "root:root"
             permissions: "0644"
             content: |
@@ -755,7 +759,7 @@ resources:
                   requests:
                     storage: 100Mi
               status: {}
-          - path: /etc/kubernetes/dt/context_deployment.yaml
+          - path: /etc/kubernetes/dt/context.deployment
             owner: "root:root"
             permissions: "0644"
             content: |
@@ -794,7 +798,7 @@ resources:
                       persistentVolumeClaim:
                         claimName: context-claim0
               status: {}
-          - path: /etc/kubernetes/dt/context_service.yaml
+          - path: /etc/kubernetes/dt/context.service
             owner: "root:root"
             permissions: "0644"
             content: |
@@ -817,10 +821,10 @@ resources:
                   io.kompose.service: context
               status:
                 loadBalancer: {}             
-          - path: /etc/kubernetes/dt/identity_deployment.yaml
+          - path: /etc/kubernetes/dt/identity.deployment
             owner: "root:root"
-              permissions: "0644"
-              content: |
+            permissions: "0644"
+            content: |
               apiVersion: extensions/v1beta1
               kind: Deployment
               metadata:
@@ -874,31 +878,31 @@ resources:
                       resources: {}
                     restartPolicy: Always
               status: {}
-          - path: /etc/kubernetes/dt/identity_service.yaml
+          - path: /etc/kubernetes/dt/identity.service
             owner: "root:root"
-              permissions: "0644"
-              content: |
-                apiVersion: v1
-                kind: Service
-                metadata:
-                  annotations:
-                    kompose.cmd: kompose convert -f /Users/imac/Desktop/untitled folder/docker-compose.yml
-                    kompose.version: 1.16.0 ()
-                  creationTimestamp: null
-                  labels:
-                    io.kompose.service: identity
-                  name: identity
-                spec:
-                  ports:
-                  - name: "3100"
-                    port: 3100
-                    targetPort: 3100
-                  selector:
-                    io.kompose.service: identity
-                status:
-                  loadBalancer: {}
-          - path: /etc/kubernetes/dt/ipfs_deployment.yaml
-            owner: "root:root"
+            permissions: "0644"
+            content: |
+              apiVersion: v1
+              kind: Service
+              metadata:
+                annotations:
+                  kompose.cmd: kompose convert -f /Users/imac/Desktop/untitled folder/docker-compose.yml
+                  kompose.version: 1.16.0 ()
+                creationTimestamp: null
+                labels:
+                  io.kompose.service: identity
+                name: identity
+              spec:
+                ports:
+                - name: "3100"
+                  port: 3100
+                  targetPort: 3100
+                selector:
+                  io.kompose.service: identity
+              status:
+                loadBalancer: {}
+          - path: /etc/kubernetes/dt/ipfs.deployment
+              owner: "root:root"
               permissions: "0644"
               content: |
                 apiVersion: extensions/v1beta1
@@ -928,31 +932,31 @@ resources:
                         resources: {}
                       restartPolicy: Always
                 status: {}
-          - path: /etc/kubernetes/dt/ipfs_service.yaml
-            owner: "root:root"
+          - path: /etc/kubernetes/dt/ipfs.service
+              owner: "root:root"
               permissions: "0644"
               content: |
-                apiVersion: v1
-                kind: Service
-                metadata:
-                  annotations:
-                    kompose.cmd: kompose convert -f /Users/imac/Desktop/untitled folder/docker-compose.yml
-                    kompose.version: 1.16.0 ()
-                  creationTimestamp: null
-                  labels:
-                    io.kompose.service: ipfs
-                  name: ipfs
-                spec:
-                  ports:
-                  - name: "5001"
-                    port: 5001
-                    targetPort: 5001
-                  selector:
-                    io.kompose.service: ipfs
-                status:
-                  loadBalancer: {}              
-          - path: /etc/kubernetes/dt/patchbay_deployment
-            owner: "root:root"
+                  apiVersion: v1
+                  kind: Service
+                  metadata:
+                    annotations:
+                      kompose.cmd: kompose convert -f /Users/imac/Desktop/untitled folder/docker-compose.yml
+                      kompose.version: 1.16.0 ()
+                    creationTimestamp: null
+                    labels:
+                      io.kompose.service: ipfs
+                    name: ipfs
+                  spec:
+                    ports:
+                    - name: "5001"
+                      port: 5001
+                      targetPort: 5001
+                    selector:
+                      io.kompose.service: ipfs
+                  status:
+                    loadBalancer: {}              
+          - path: /etc/kubernetes/dt/patchbay.deployment
+              owner: "root:root"
               permissions: "0644"
               content: |
                 apiVersion: extensions/v1beta1
@@ -1014,7 +1018,7 @@ resources:
                         resources: {}
                       restartPolicy: Always
                 status: {}
-          - path: /etc/kubernetes/dt/patchbay_service.yaml
+          - path: /etc/kubernetes/dt/patchbay.service
               owner: "root:root"
               permissions: "0644"
               content: |
@@ -1037,37 +1041,37 @@ resources:
                     io.kompose.service: patchbay
                 status:
                   loadBalancer: {}
-          - path: /etc/kubernetes/dt/postgres_deployment.yaml
+          - path: /etc/kubernetes/dt/postgres.deployment
               owner: "root:root"
-                permissions: "0644"
-                content: |
-                  apiVersion: extensions/v1beta1
-                  kind: Deployment
-                  metadata:
-                    annotations:
-                      kompose.cmd: kompose convert -f /Users/imac/Desktop/untitled folder/docker-compose.yml
-                      kompose.version: 1.16.0 ()
-                    creationTimestamp: null
-                    labels:
-                      io.kompose.service: postgres
-                    name: postgres
-                  spec:
-                    replicas: 1
-                    strategy: {}
-                    template:
-                      metadata:
-                        creationTimestamp: null
-                        labels:
-                          io.kompose.service: postgres
-                      spec:
-                        containers:
-                        - image: postgres:9.6-alpine
-                          name: postgres
-                          resources: {}
-                        restartPolicy: Always
-                  status: {}
-          - path: /etc/kubernetes/dt/rabbitmq_deployment.yaml
-            owner: "root:root"
+              permissions: "0644"
+              content: |
+                apiVersion: extensions/v1beta1
+                kind: Deployment
+                metadata:
+                  annotations:
+                    kompose.cmd: kompose convert -f /Users/imac/Desktop/untitled folder/docker-compose.yml
+                    kompose.version: 1.16.0 ()
+                  creationTimestamp: null
+                  labels:
+                    io.kompose.service: postgres
+                  name: postgres
+                spec:
+                  replicas: 1
+                  strategy: {}
+                  template:
+                    metadata:
+                      creationTimestamp: null
+                      labels:
+                        io.kompose.service: postgres
+                    spec:
+                      containers:
+                      - image: postgres:9.6-alpine
+                        name: postgres
+                        resources: {}
+                      restartPolicy: Always
+                status: {}
+          - path: /etc/kubernetes/dt/rabbitmq.deployment
+              owner: "root:root"
               permissions: "0644"
               content: |
                 apiVersion: extensions/v1beta1
@@ -1098,8 +1102,8 @@ resources:
                         resources: {}
                       restartPolicy: Always
                 status: {}
-          - path: /etc/kubernetes/dt/rabbitmq_service.yaml
-            owner: "root:root"
+          - path: /etc/kubernetes/dt/rabbitmq.service
+              owner: "root:root"
               permissions: "0644"
               content: |
                 apiVersion: v1
@@ -1124,8 +1128,8 @@ resources:
                     io.kompose.service: rabbitmq
                 status:
                   loadBalancer: {}
-          - path: /etc/kubernetes/dt/redis_deployment.yaml
-            owner: "root:root"
+          - path: /etc/kubernetes/dt/redis.deployment
+              owner: "root:root"
               permissions: "0644"
               content: |
                 apiVersion: extensions/v1beta1
@@ -1155,8 +1159,8 @@ resources:
                         resources: {}
                       restartPolicy: Always
                 status: {}
-          - path: /etc/kubernetes/dt/redis_service.yaml
-            owner: "root:root"
+          - path: /etc/kubernetes/dt/redis.service
+              owner: "root:root"
               permissions: "0644"
               content: |
                 apiVersion: v1
@@ -1178,8 +1182,8 @@ resources:
                     io.kompose.service: redis
                 status:
                   loadBalancer: {}
-          - path: /etc/kubernetes/dt/task-mgmt_deployment.yaml
-            owner: "root:root"
+          - path: /etc/kubernetes/dt/task-mgmt.deployment
+              owner: "root:root"
               permissions: "0644"
               content: |
                 apiVersion: extensions/v1beta1
@@ -1235,29 +1239,29 @@ resources:
                         resources: {}
                       restartPolicy: Always
                 status: {}
-          - path: /etc/kubernetes/dt/task-mgmt_service.yaml
+          - path: /etc/kubernetes/dt/task-mgmt.service
               owner: "root:root"
-                permissions: "0644"
-                content: |
-                  apiVersion: v1
-                  kind: Service
-                  metadata:
-                    annotations:
-                      kompose.cmd: kompose convert -f /Users/imac/Desktop/untitled folder/docker-compose.yml
-                      kompose.version: 1.16.0 ()
-                    creationTimestamp: null
-                    labels:
-                      io.kompose.service: task-mgmt
-                    name: task-mgmt
-                  spec:
-                    ports:
-                    - name: "3400"
-                      port: 3400
-                      targetPort: 3400
-                    - name: "4400"
-                      port: 4400
-                      targetPort: 4400
-                    selector:
-                      io.kompose.service: task-mgmt
-                  status:
-                    loadBalancer: {}
+              permissions: "0644"
+              content: |
+                apiVersion: v1
+                kind: Service
+                metadata:
+                  annotations:
+                    kompose.cmd: kompose convert -f /Users/imac/Desktop/untitled folder/docker-compose.yml
+                    kompose.version: 1.16.0 ()
+                  creationTimestamp: null
+                  labels:
+                    io.kompose.service: task-mgmt
+                  name: task-mgmt
+                spec:
+                  ports:
+                  - name: "3400"
+                    port: 3400
+                    targetPort: 3400
+                  - name: "4400"
+                    port: 4400
+                    targetPort: 4400
+                  selector:
+                    io.kompose.service: task-mgmt
+                status:
+                  loadBalancer: {}
