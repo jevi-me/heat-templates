@@ -659,11 +659,13 @@ resources:
         echo "------------------------------------------------------"
         cat /etc/sysconfig/flanneld
         echo "------------------------------------------------------"
-        echo $FLANNEL_ETCD
+        cat /etc/kubernetes/config
         echo "------------------------------------------------------"
-        echo $FLANNEL_NETWORK_SUBNETLEN
+        cat /etc/kubernetes/apiserver
         echo "------------------------------------------------------"
         cat /usr/local/bin/flannel-config
+        echo "------------------------------------------------------"
+        cat /etc/kubernetes/controller-manager
         echo "------------------------------------------------------"
         whoami
         echo "------------------------------------------------------"
@@ -700,7 +702,7 @@ resources:
         - config: {get_resource: install_kubernetes}
         - config: {get_resource: write_heat_params_node}
         - config: {get_resource: kube_user}
-        - config: {get_resource: kube_examples}
+        #- config: {get_resource: kube_examples}
         - config: {get_resource: configure_docker_storage}
         - config: {get_resource: kube_register}
         - config: {get_resource: configure_kubernetes_node}
