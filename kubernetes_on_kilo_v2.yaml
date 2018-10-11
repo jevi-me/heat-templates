@@ -304,7 +304,7 @@ resources:
   kube_register:
     type: OS::Heat::SoftwareConfig
     depends_on:
-      - write_heat_params
+      - write_heat_params_node
     properties:
       group: ungrouped
       config: |
@@ -361,7 +361,7 @@ resources:
   configure_docker_storage:
     type: OS::Heat::SoftwareConfig
     depends_on:
-      - write_heat_params
+      - write_heat_params_node
     properties:
       group: ungrouped
       config: |
