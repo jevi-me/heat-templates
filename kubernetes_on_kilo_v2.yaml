@@ -58,7 +58,6 @@ parameters:
     - custom_constraint: neutron.network
     description: Must be a valid Neutron Network.
 
-
   fixed_network_cidr:
     type: string
     description: network range for fixed ip network
@@ -66,8 +65,7 @@ parameters:
 
   portal_network_cidr:
     type: string
-    description: >
-      address range used by kubernetes for service portals
+    description: address range used by kubernetes for service portals
     default: 10.254.0.0/16
 
   flannel_network_cidr:
@@ -91,17 +89,14 @@ parameters:
 
   kube_allow_priv:
     type: string
-    description: >
-      whether or not kubernetes should permit privileged containers.
+    description: whether or not kubernetes should permit privileged containers.
     default: "true"
     constraints:
       - allowed_values: ["true", "false"]
 
   docker_volume_size:
     type: number
-    description: >
-      size of a cinder volume to allocate to docker for container/image
-      storage
+    description: size of a cinder volume to allocate to docker for container/image storage
     default: 25
 
   wait_condition_timeout:
@@ -143,7 +138,11 @@ parameters:
     default: 60
 
 resources:
+  ########################################
+  ##  Software Configurations Parts
+  ########################################
 
+  ### STAGE 1
   disable_selinux:
     type: OS::Heat::SoftwareConfig
     properties:
@@ -158,8 +157,32 @@ resources:
         ' /etc/selinux/config
         echo ">> ... END Disable SELINUX"
 
+  scale_up_policy:
+    type: OS::Heat::ScalingPolicy
+    properties:
+      adjustment_type: change_in_capacity
+      auto_scaling_group_id: { get_resource: k8s_node }
+      cooldown: {get_param: scale_up_cooldown}
+      scaling_adjustment: 1
+
+  scale_down_policy:
+    type: OS::Heat::ScalingPolicy
+    properties:
+      adjustment_type: change_in_capacity
+      auto_scaling_group_id: { get_resource: k8s_node }
+      cooldown: {get_param: scale_down_cooldown}
+      scaling_adjustment: -1
+
+  server_group:
+    type: OS::Nova::ServerGroup
+    properties:
+      name: nova-server-group
+
+  ### STAGE 2
   atomic_upgrade:
     type: OS::Heat::SoftwareConfig
+    depends_on:
+      - disable_selinux
     properties:
       group: ungrouped
       config: |
@@ -167,22 +190,17 @@ resources:
         merge_how: dict(recurse_array)+list(append)
         bootcmd:
           - |
-        test -f /etc/upgrade-flag ||
-        { rm -rf /var/lib/cloud/instances/*;
-          rpm-ostree upgrade > /var/log/ostree-upgrade.log 2>&1;
-          touch /etc/upgrade-flag;
-          reboot; }        
+            test -f /etc/upgrade-flag ||
+            { rm -rf /var/lib/cloud/instances/*;
+              rpm-ostree upgrade > /var/log/ostree-upgrade.log 2>&1;
+              touch /etc/upgrade-flag;
+              reboot; }        
 
-  checkpoint:
-    type: OS::Heat::SoftwareConfig
-    properties:
-      group: ungrouped
-      config: |
-        #!/bin/sh
-        echo ">> CHECKPOINT!"
-
+  ### STAGE 3
   install_kubernetes:
     type: OS::Heat::SoftwareConfig
+    depends_on:
+      - atomic_upgrade
     properties:
       group: ungrouped
       config: |
@@ -192,8 +210,28 @@ resources:
         sudo dnf -y install flannel
         echo ">> ... END install kubernetes and flanneld"
 
+  kube_user:
+    type: OS::Heat::SoftwareConfig
+    depends_on:
+      - atomic_upgrade
+    properties:
+      group: ungrouped
+      config: |
+        #cloud-config
+        system_info:
+          default_user:
+            name: minion
+            lock_passwd: true
+            gecos: Kubernetes Interactive User
+            groups: [wheel, adm, systemd-journal]
+            sudo: ["ALL=(ALL) NOPASSWD:ALL"]
+            shell: /bin/bash
+
+  ### STAGE 4
   install_etcd:
     type: OS::Heat::SoftwareConfig
+    depends_on:
+      - install_kubernetes
     properties:
       group: ungrouped
       config: |
@@ -202,42 +240,49 @@ resources:
         sudo dnf -y install etcd
         echo ">> ... END install etcd"
 
-  write_heat_params-master:
+  ### STAGE 5
+  write_heat_params_master:
     type: OS::Heat::SoftwareConfig
+    depends_on:
+      - install_etcd
     properties:
       group: ungrouped
       config: |
         #cloud-config
         merge_how: dict(recurse_array)+list(append)
         write_files:
-        - path: /etc/sysconfig/heat-params
-          owner: "root:root"
-          permissions: "0644"
-          content: |
-            KUBE_ALLOW_PRIV="FALSE"
-            FLANNEL_NETWORK_CIDR="10.0.0.0/24"
-            FLANNEL_NETWORK_SUBNETLEN="24"
-            FLANNEL_USE_VXLAN="FALSE"
-            PORTAL_NETWORK_CIDR="10.254.0.0/16"
+          - path: /etc/sysconfig/heat-params
+            owner: "root:root"
+            permissions: "0644"
+            content: |
+              KUBE_ALLOW_PRIV="FALSE"
+              FLANNEL_NETWORK_CIDR="10.0.0.0/24"
+              FLANNEL_NETWORK_SUBNETLEN="24"
+              FLANNEL_USE_VXLAN="FALSE"
+              PORTAL_NETWORK_CIDR="10.254.0.0/16"
 
-  write_heat_params:
+  write_heat_params_node:
     type: OS::Heat::SoftwareConfig
+    depends_on:
+      - install_etcd
     properties:
       group: ungrouped
       config: |
         #cloud-config
         merge_how: dict(recurse_array)+list(append)
         write_files:
-        - path: /etc/sysconfig/heat-params
-          owner: "root:root"
-          permissions: "0644"
-          content: |
-            KUBE_ALLOW_PRIV="FALSE"
-            #KUBE_MASTER_IP="$KUBE_MASTER_IP"
-            #DOCKER_VOLUME="$DOCKER_VOLUME"
+          - path: /etc/sysconfig/heat-params
+            owner: "root:root"
+            permissions: "0644"
+            content: |
+              KUBE_ALLOW_PRIV="FALSE"
+              #KUBE_MASTER_IP="$KUBE_MASTER_IP"
+              #DOCKER_VOLUME="$DOCKER_VOLUME"
 
   configure_etcd:
     type: OS::Heat::SoftwareConfig
+    depends_on:
+      - install_etcd
     properties:
       group: ungrouped
       config: |
@@ -255,23 +300,97 @@ resources:
         EOF
         echo ">> ... END Configure ETCD"
 
-  kube_user:
+  ### STAGE 6
+  kube_register:
     type: OS::Heat::SoftwareConfig
+    depends_on:
+      - write_heat_params
     properties:
       group: ungrouped
       config: |
         #cloud-config
-        system_info:
-          default_user:
-            name: minion
-            lock_passwd: true
-            gecos: Kubernetes Interactive User
-            groups: [wheel, adm, systemd-journal]
-            sudo: ["ALL=(ALL) NOPASSWD:ALL"]
-            shell: /bin/sh
+        merge_how: dict(recurse_array)+list(append)
+        write_files:
+          - path: /usr/local/bin/kube-register
+            permissions: "0755"
+            owner: root
+            content: |
+              #!/bin/sh
+              . /etc/sysconfig/heat-params
+              master_url=http://${KUBE_MASTER_IP}:8080
+              myip=$(ip addr show eth0 |
+                awk '$1 == "inet" {print $2}' | cut -f1 -d/)
+              # wait for master api
+              until curl -o /dev/null -sf "${master_url}/healthz"; do
+                echo ">> Waiting for kubernetes master"
+                sleep 1
+              done
+              if [ "$1" = "-u" ]; then
+              echo ">> Unregistering minion $myip"
+              kubectl -s ${master_url} delete minion/$myip
+              else
+              echo ">> Registering minion $myip"
+              cpu=$(($(nproc) * 1000))
+              memory=$(awk '/MemTotal: /{print $2 * 1024}' /proc/meminfo)
+              cat <<EOF | kubectl create -s ${master_url} -f-
+              apiVersion: v1beta1
+              id: $myip
+              kind: Minion
+              resources:
+                capacity:
+                  cpu: $cpu
+                  memory: $memory
+              EOF
+              fi
+          - path: /etc/systemd/system/kube-register.service
+            permissions: "0644"
+            owner: root
+            content: |
+              [Unit]
+              Description=Register/unregister this node with the Kubernetes master
+              Requires=kubelet.service
+              After=kubelet.service
+              [Service]
+              Type=oneshot
+              RemainAfterExit=yes
+              ExecStart=/usr/local/bin/kube-register
+              ExecStop=/usr/local/bin/kube-register -u
+              [Install]
+              WantedBy=kubelet.service
+
+  configure_docker_storage:
+    type: OS::Heat::SoftwareConfig
+    depends_on:
+      - write_heat_params
+    properties:
+      group: ungrouped
+      config: |
+        #!/bin/sh
+        echo ">> Configuring Docker Storage"
+        . /etc/sysconfig/heat-params
+        DOCKER_DEV=/dev/disk/by-id/virtio-${DOCKER_VOLUME:0:20}
+        attempts=60
+        while [[ ! -b $DOCKER_DEV && $attempts != 0 ]]; do
+          echo ">> Waiting for disk $DOCKER_DEV"
+          sleep 0.5
+          udevadm trigger
+          let attempts--
+        done
+        if ! [ -b $DOCKER_DEV ]; then
+          echo ">> ERROR: device $DOCKER_DEV does not exist" >&2
+          exit 1
+        fi
+        pvcreate $DOCKER_DEV
+        vgcreate docker $DOCKER_DEV
+        cat > /etc/sysconfig/docker-storage-setup <<EOF
+        VG=docker
+        EOF
+        echo ">> ... END Configuring Docker Storage"
 
   configure_kubernetes_master:
     type: OS::Heat::SoftwareConfig
+    depends_on:
+      - write_heat_params_master
     properties:
       group: ungrouped
       config: |
@@ -292,6 +411,8 @@ resources:
 
   configure_kubernetes_node:
     type: OS::Heat::SoftwareConfig
+    depends_on:
+      - write_heat_params_node
     properties:
       group: ungrouped
       config: |
@@ -322,6 +443,9 @@ resources:
 
   write_flannel_config:
     type: OS::Heat::SoftwareConfig
+    depends_on:
+      - write_heat_params_master
+      - configure_etcd
     properties:
       group: ungrouped
       config: |
@@ -353,24 +477,12 @@ resources:
         EOF
         echo ">> ... END Flannel Config"
 
-  enable_services:
-    type: OS::Heat::SoftwareConfig
-    properties:
-      group: ungrouped
-      config: |
-        #!/bin/sh
-        # make sure we pick up any modified unit files
-        systemctl daemon-reload
-        echo ">> Starting services"
-        for service in etcd kube-apiserver kube-scheduler kube-controller-manager flanneld kube-proxy; do
-          echo ">> Activating service $service"
-          systemctl enable $service
-          systemctl --no-block start $service
-        done
-        echo ">> ... Completed starting services"
-
+  ### STAGE 7
   flannel_config_service:
     type: OS::Heat::SoftwareConfig
+    depends_on:
+      - configure_kubernetes_master
+      - write_flannel_config
     properties:
       group: ungrouped
       config: |
@@ -415,35 +527,747 @@ resources:
           - systemctl enable flannel-config
           - systemctl start --no-block flannel-config
 
-  configure_docker_storage:
+  docker_service:
     type: OS::Heat::SoftwareConfig
+    depends_on:
+      - configure_kubernetes_master
+      - write_flannel_config
+    properties:
+      group: ungrouped
+      config: |
+        #cloud-config
+        merge_how: dict(recurse_array)+list(append)
+        bootcmd:
+          - mkdir -p /etc/systemd/system/docker.service.d
+          - mkdir -p /etc/systemd/system/flanneld.service.d
+        write_files:
+          - path: /usr/local/bin/flannel-docker-bridge
+            owner: "root:root"
+            permissions: "0755"
+            content: |
+              #!/bin/sh
+              if ! [ "$FLANNEL_SUBNET" ] && [ "$FLANNEL_MTU" ] ; then
+                echo ">> ERROR: missing required environment variables." >&2
+                exit 1
+              fi
+              mkdir -p /run/flannel/
+              cat > /run/flannel/docker <<EOF
+              DOCKER_NETWORK_OPTIONS="--bip=$FLANNEL_SUBNET --mtu=$FLANNEL_MTU"
+              EOF
+          - path: /etc/systemd/system/flannel-docker-bridge.service
+            owner: "root:root"
+            permissions: "0644"
+            content: |
+              [Unit]
+              After=flanneld.service
+              Before=docker.service
+              Requires=flanneld.service
+              [Service]
+              Type=oneshot
+              EnvironmentFile=/run/flannel/subnet.env
+              ExecStart=/usr/local/bin/flannel-docker-bridge
+              [Install]
+              WantedBy=docker.service
+          - path: /etc/systemd/system/docker.service.d/flannel.conf
+            owner: "root:root"
+            permissions: "0644"
+            content: |
+              [Unit]
+              Requires=flannel-docker-bridge.service
+              After=flannel-docker-bridge.service
+              [Service]
+              EnvironmentFile=/run/flannel/docker
+          - path: /etc/systemd/system/flanneld.service.d/flannel-docker-bridge.conf
+            owner: "root:root"
+            permissions: "0644"
+            content: |
+              [Unit]
+              Requires=flannel-docker-bridge.service
+              Before=flannel-docker-bridge.service
+              [Install]
+              Also=flannel-docker-bridge.service
+
+  ### STAGE 8
+  enable_services_master:
+    type: OS::Heat::SoftwareConfig
+    depends_on:
+      - flannel_config_service
     properties:
       group: ungrouped
       config: |
         #!/bin/sh
-        echo ">> Configuring Docker Storage"
-        . /etc/sysconfig/heat-params
-        DOCKER_DEV=/dev/disk/by-id/virtio-${DOCKER_VOLUME:0:20}
-        attempts=60
-        while [[ ! -b $DOCKER_DEV && $attempts != 0 ]]; do
-          echo ">> Waiting for disk $DOCKER_DEV"
-          sleep 0.5
-          udevadm trigger
-          let attempts--
+        # make sure we pick up any modified unit files
+        systemctl daemon-reload
+        echo ">> Starting services"
+        for service in etcd kube-apiserver kube-scheduler kube-controller-manager kube-proxy flanneld; do
+          echo ">> Activating service $service"
+          systemctl enable $service
+          systemctl --no-block start $service
         done
-        if ! [ -b $DOCKER_DEV ]; then
-          echo ">> ERROR: device $DOCKER_DEV does not exist" >&2
-          exit 1
-        fi
-        pvcreate $DOCKER_DEV
-        vgcreate docker $DOCKER_DEV
-        cat > /etc/sysconfig/docker-storage-setup <<EOF
-        VG=docker
-        EOF
-        echo ">> ... END Configuring Docker Storage"
+        echo ">> ... Completed starting services"
 
+  enable_services_node:
+    type: OS::Heat::SoftwareConfig
+    depends_on:
+      - docker_service
+    properties:
+      group: ungrouped
+      config: |
+        #!/bin/sh
+        echo ">> Starting services"
+        # docker is already enabled and possibly running on centos atomic host
+        # so we need to stop it first and delete the docker0 bridge (which will
+        # be re-created using the flannel-provided subnet).
+        echo ">> Stopping docker"
+        systemctl stop docker
+        ip link del docker0
+        # make sure we pick up any modified unit files
+        systemctl daemon-reload
+        for service in flanneld docker kubelet kube-proxy; do
+          echo ">> Activating service $service"
+          systemctl enable $service
+          systemctl --no-block start $service
+        done
+        echo ">> ... Completed starting services"
+  
+  ### STAGE 9
+  add_ons:
+    type: OS::Heat::SoftwareConfig
+    depends_on:
+      - enable_services_master
+    properties:
+      group: ungrouped
+      config: |
+        #!/bin/sh
+        echo ">> Applying Addons"
+        kubectl apply -f https://raw.githubusercontent.com/kubernetes/dashboard/master/src/deploy/recommended/kubernetes-dashboard.yaml
+        kubectl apply -f https://raw.githubusercontent.com/giantswarm/kubernetes-prometheus/master/manifests-all.yaml
+        kubectl get all --all-namespaces=true
+        echo ">> ... END Applying Addons"
+
+  ########################################
+  ##  Software Configurations Init
+  ########################################
+  kube_master_init:
+    type: OS::Heat::MultipartMime
+    properties:
+      parts:
+        - config: {get_resource: disable_selinux}
+        - config: {get_resource: atomic_upgrade}
+        - config: {get_resource: install_kubernetes}
+        - config: {get_resource: install_etcd}
+        - config: {get_resource: write_heat_params_master}
+        - config: {get_resource: configure_etcd}
+        - config: {get_resource: kube_user}
+        - config: {get_resource: configure_kubernetes_master}
+        - config: {get_resource: enable_services_master}
+        - config: {get_resource: write_flannel_config}
+        - config: {get_resource: flannel_config_service}
+        - config: {get_resource: kube_examples}
+        - config: {get_resource: add_ons}
+        - config: {get_resource: kube_dt}
+
+  kube_node_init:
+    type: OS::Heat::MultipartMime
+    properties:
+      parts:
+        - config: {get_resource: disable_selinux}
+        - config: {get_resource: atomic_upgrade}
+        - config: {get_resource: install_kubernetes}
+        - config: {get_resource: write_heat_params_node}
+        - config: {get_resource: kube_user}
+        - config: {get_resource: kube_examples}
+        - config: {get_resource: configure_docker_storage}
+        - config: {get_resource: kube_register}
+        - config: {get_resource: configure_kubernetes_node}
+        - config: {get_resource: docker_service}
+        - config: {get_resource: enable_services_node}
+        - config: {get_resource: add_ons}
+
+
+  ########################################
+  ##  Servers
+  ########################################
+  k8s_master:
+    type: OS::Nova::Server
+    depends_on:
+      - kube_master_init
+    properties:
+      name: k8s_master
+      image:    { get_param: image   }
+      flavor:   { get_param: flavor  }
+      key_name: { get_param: keyname }
+      networks: 
+      - network: { get_param: network_resource }
+      scheduler_hints: { group: { get_resource: server_group } }
+      metadata: 
+        kube_group: k8scluster,vault,nofloating
+      user_data_format: RAW
+      user_data: {get_resource: kube_master_init}
+
+  k8s_node:
+    type: OS::Heat::AutoScalingGroup
+    depends_on:
+      - kube_node_init
+    properties:
+      min_size: 1
+      desired_capacity: { get_param: k8s_node_count }
+      max_size: 6
+      resource:
+        type: OS::Nova::Server
+        properties:
+          image:    { get_param: image   }
+          flavor:   { get_param: flavor  }
+          key_name: { get_param: keyname }
+          networks: 
+          - network: { get_param: network_resource }
+          scheduler_hints: { group: { get_resource: server_group } }
+          metadata: 
+            kube_group: k8snode,k8scluster,nofloating
+          user_data_format: RAW
+          user_data: {get_resource: kube_node_init}
+
+  ########################################
+  ##  Kubernetes Node Services
+  ########################################
+  kube_dt: 
+      type: OS::Heat::SoftwareConfig
+      depends_on:
+        - install_etcd
+      properties:
+        group: ungrouped
+        config: |-
+            #cloud-config
+            write_files:
+              - path: /etc/kubernetes/dt/context.claim
+                owner: "root:root"
+                permissions: "0644"
+                content: |
+                  apiVersion: v1
+                  kind: PersistentVolumeClaim
+                  metadata:
+                    creationTimestamp: null
+                    labels:
+                      io.kompose.service: context-claim0
+                    name: context-claim0
+                  spec:
+                    accessModes:
+                    - ReadWriteOnce
+                    resources:
+                      requests:
+                        storage: 100Mi
+                  status: {}
+              - path: /etc/kubernetes/dt/context.deployment
+                owner: "root:root"
+                permissions: "0644"
+                content: |
+                  apiVersion: extensions/v1beta1
+                  kind: Deployment
+                  metadata:
+                    annotations:
+                      kompose.cmd: kompose convert -f /Users/imac/Desktop/untitled folder/docker-compose.yml
+                      kompose.version: 1.16.0 ()
+                    creationTimestamp: null
+                    labels:
+                      io.kompose.service: context
+                    name: context
+                  spec:
+                    replicas: 1
+                    strategy:
+                      type: Recreate
+                    template:
+                      metadata:
+                        creationTimestamp: null
+                        labels:
+                          io.kompose.service: context
+                      spec:
+                        containers:
+                        - image: context
+                          name: context
+                          ports:
+                          - containerPort: 4000
+                          resources: {}
+                          volumeMounts:
+                          - mountPath: /home/context/src
+                            name: context-claim0
+                        restartPolicy: Always
+                        volumes:
+                        - name: context-claim0
+                          persistentVolumeClaim:
+                            claimName: context-claim0
+                  status: {}
+              - path: /etc/kubernetes/dt/context.service
+                owner: "root:root"
+                permissions: "0644"
+                content: |
+                  apiVersion: v1
+                  kind: Service
+                  metadata:
+                    annotations:
+                      kompose.cmd: kompose convert -f /Users/imac/Desktop/untitled folder/docker-compose.yml
+                      kompose.version: 1.16.0 ()
+                    creationTimestamp: null
+                    labels:
+                      io.kompose.service: context
+                    name: context
+                  spec:
+                    ports:
+                    - name: "4000"
+                      port: 4000
+                      targetPort: 4000
+                    selector:
+                      io.kompose.service: context
+                  status:
+                    loadBalancer: {}             
+              - path: /etc/kubernetes/dt/identity.deployment
+                owner: "root:root"
+                permissions: "0644"
+                content: |
+                  apiVersion: extensions/v1beta1
+                  kind: Deployment
+                  metadata:
+                    annotations:
+                      kompose.cmd: kompose convert -f /Users/imac/Desktop/untitled folder/docker-compose.yml
+                      kompose.version: 1.16.0 ()
+                    creationTimestamp: null
+                    labels:
+                      io.kompose.service: identity
+                    name: identity
+                  spec:
+                    replicas: 1
+                    strategy: {}
+                    template:
+                      metadata:
+                        creationTimestamp: null
+                        labels:
+                          io.kompose.service: identity
+                      spec:
+                        containers:
+                        - env:
+                          - name: ALLOWED_ORIGINS
+                            value: http://localhost:3000
+                          - name: GOLANG_ENV
+                            value: develop
+                          - name: PORT
+                            value: "3100"
+                          - name: POSTGRES_DB_URL
+                            value: postgres://postgres@postgres/postgres?sslmode=disable
+                          - name: PRIVATE_KEY
+                            value: |
+                              -----BEGIN RSA PRIVATE KEY-----
+                              MIIBOwIBAAJBAMOsqD9mC5mWC4Fa5rTU3Zaq+ZWIgEzwC0nkkPMLVAfJpkFI7uiy
+                              CIj5n6OuPCDGNJTzXMjJsBd1YhUqzg2XnAsCAwEAAQJAF8Qoy0qBri3jR9ramqwg
+                              HeS2W8swiie9t0PjtyFxG2DUP6ENDgodWzrA+WJD5dJSlkWUlwgCUJ3jk/vK3eOJ
+                              AQIhAOi5Y0dUpR8GVQX7YeIDug4N39T2FnYxB1XdH5GKX/fxAiEA1z6oRREeTGTL
+                              ULZYRkyz41tVC+uCTGeUw1i9UMi8b7sCIQDRP49CXZsx8BGWlVaHT26EoHj3FGVR
+                              0/eSfoWZ6N8tIQIhAI2y6gPN6SxRjqdr42EkTah3D93xBK5X4k9XtAninGrRAiB7
+                              k4uJgqHl8hgs3bndGibFuepdLWJed7YXa+eF57FdmA==
+                              -----END RSA PRIVATE KEY-----
+                          - name: PUBLIC_KEY
+                            value: |
+                              -----BEGIN PUBLIC KEY-----
+                              MFwwDQYJKoZIhvcNAQEBBQADSwAwSAJBAMOsqD9mC5mWC4Fa5rTU3Zaq+ZWIgEzw
+                              C0nkkPMLVAfJpkFI7uiyCIj5n6OuPCDGNJTzXMjJsBd1YhUqzg2XnAsCAwEAAQ==
+                              -----END PUBLIC KEY-----
+                          image: datatogether/identity:latest
+                          name: identity
+                          ports:
+                          - containerPort: 3100
+                          resources: {}
+                        restartPolicy: Always
+                  status: {}
+              - path: /etc/kubernetes/dt/identity.service
+                owner: "root:root"
+                permissions: "0644"
+                content: |
+                  apiVersion: v1
+                  kind: Service
+                  metadata:
+                    annotations:
+                      kompose.cmd: kompose convert -f /Users/imac/Desktop/untitled folder/docker-compose.yml
+                      kompose.version: 1.16.0 ()
+                    creationTimestamp: null
+                    labels:
+                      io.kompose.service: identity
+                    name: identity
+                  spec:
+                    ports:
+                    - name: "3100"
+                      port: 3100
+                      targetPort: 3100
+                    selector:
+                      io.kompose.service: identity
+                  status:
+                    loadBalancer: {}
+              - path: /etc/kubernetes/dt/ipfs.deployment
+                  owner: "root:root"
+                  permissions: "0644"
+                  content: |
+                    apiVersion: extensions/v1beta1
+                    kind: Deployment
+                    metadata:
+                      annotations:
+                        kompose.cmd: kompose convert -f /Users/imac/Desktop/untitled folder/docker-compose.yml
+                        kompose.version: 1.16.0 ()
+                      creationTimestamp: null
+                      labels:
+                        io.kompose.service: ipfs
+                      name: ipfs
+                    spec:
+                      replicas: 1
+                      strategy: {}
+                      template:
+                        metadata:
+                          creationTimestamp: null
+                          labels:
+                            io.kompose.service: ipfs
+                        spec:
+                          containers:
+                          - image: ipfs/go-ipfs:latest
+                            name: ipfs
+                            ports:
+                            - containerPort: 5001
+                            resources: {}
+                          restartPolicy: Always
+                    status: {}
+              - path: /etc/kubernetes/dt/ipfs.service
+                  owner: "root:root"
+                  permissions: "0644"
+                  content: |
+                    apiVersion: v1
+                    kind: Service
+                    metadata:
+                      annotations:
+                        kompose.cmd: kompose convert -f /Users/imac/Desktop/untitled folder/docker-compose.yml
+                        kompose.version: 1.16.0 ()
+                      creationTimestamp: null
+                      labels:
+                        io.kompose.service: ipfs
+                      name: ipfs
+                    spec:
+                      ports:
+                      - name: "5001"
+                        port: 5001
+                        targetPort: 5001
+                      selector:
+                        io.kompose.service: ipfs
+                    status:
+                      loadBalancer: {}              
+              - path: /etc/kubernetes/dt/patchbay.deployment
+                  owner: "root:root"
+                  permissions: "0644"
+                  content: |
+                    apiVersion: extensions/v1beta1
+                    kind: Deployment
+                    metadata:
+                      annotations:
+                        kompose.cmd: kompose convert -f /Users/imac/Desktop/untitled folder/docker-compose.yml
+                        kompose.version: 1.16.0 ()
+                      creationTimestamp: null
+                      labels:
+                        io.kompose.service: patchbay
+                      name: patchbay
+                    spec:
+                      replicas: 1
+                      strategy: {}
+                      template:
+                        metadata:
+                          creationTimestamp: null
+                          labels:
+                            io.kompose.service: patchbay
+                        spec:
+                          containers:
+                          - env:
+                            - name: GOLANG_ENV
+                              value: develop
+                            - name: PORT
+                              value: "3000"
+                            - name: POSTGRES_DB_URL
+                              value: postgres://postgres@postgres/postgres?sslmode=disable
+                            - name: PRIVATE_KEY
+                              value: |
+                                -----BEGIN RSA PRIVATE KEY-----
+                                MIIBOwIBAAJBAMOsqD9mC5mWC4Fa5rTU3Zaq+ZWIgEzwC0nkkPMLVAfJpkFI7uiy
+                                CIj5n6OuPCDGNJTzXMjJsBd1YhUqzg2XnAsCAwEAAQJAF8Qoy0qBri3jR9ramqwg
+                                HeS2W8swiie9t0PjtyFxG2DUP6ENDgodWzrA+WJD5dJSlkWUlwgCUJ3jk/vK3eOJ
+                                AQIhAOi5Y0dUpR8GVQX7YeIDug4N39T2FnYxB1XdH5GKX/fxAiEA1z6oRREeTGTL
+                                ULZYRkyz41tVC+uCTGeUw1i9UMi8b7sCIQDRP49CXZsx8BGWlVaHT26EoHj3FGVR
+                                0/eSfoWZ6N8tIQIhAI2y6gPN6SxRjqdr42EkTah3D93xBK5X4k9XtAninGrRAiB7
+                                k4uJgqHl8hgs3bndGibFuepdLWJed7YXa+eF57FdmA==
+                                -----END RSA PRIVATE KEY-----
+                            - name: PUBLIC_KEY
+                              value: |
+                                -----BEGIN PUBLIC KEY-----
+                                MFwwDQYJKoZIhvcNAQEBBQADSwAwSAJBAMOsqD9mC5mWC4Fa5rTU3Zaq+ZWIgEzw
+                                C0nkkPMLVAfJpkFI7uiyCIj5n6OuPCDGNJTzXMjJsBd1YhUqzg2XnAsCAwEAAQ==
+                                -----END PUBLIC KEY-----
+                            - name: REDIS_URL
+                              value: redis:6379
+                            - name: TASKS_SERVICE_URL
+                              value: task-mgmt:4400
+                            - name: TITLE
+                              value: Data Together
+                            - name: WEBAPP_SCRIPTS
+                              value: http://localhost:4000/static/bundle.js
+                            image: datatogether/patchbay:latest
+                            name: patchbay
+                            ports:
+                            - containerPort: 3000
+                            resources: {}
+                          restartPolicy: Always
+                    status: {}
+              - path: /etc/kubernetes/dt/patchbay.service
+                  owner: "root:root"
+                  permissions: "0644"
+                  content: |
+                    apiVersion: v1
+                    kind: Service
+                    metadata:
+                      annotations:
+                        kompose.cmd: kompose convert -f /Users/imac/Desktop/untitled folder/docker-compose.yml
+                        kompose.version: 1.16.0 ()
+                      creationTimestamp: null
+                      labels:
+                        io.kompose.service: patchbay
+                      name: patchbay
+                    spec:
+                      ports:
+                      - name: "3000"
+                        port: 3000
+                        targetPort: 3000
+                      selector:
+                        io.kompose.service: patchbay
+                    status:
+                      loadBalancer: {}
+              - path: /etc/kubernetes/dt/postgres.deployment
+                  owner: "root:root"
+                  permissions: "0644"
+                  content: |
+                    apiVersion: extensions/v1beta1
+                    kind: Deployment
+                    metadata:
+                      annotations:
+                        kompose.cmd: kompose convert -f /Users/imac/Desktop/untitled folder/docker-compose.yml
+                        kompose.version: 1.16.0 ()
+                      creationTimestamp: null
+                      labels:
+                        io.kompose.service: postgres
+                      name: postgres
+                    spec:
+                      replicas: 1
+                      strategy: {}
+                      template:
+                        metadata:
+                          creationTimestamp: null
+                          labels:
+                            io.kompose.service: postgres
+                        spec:
+                          containers:
+                          - image: postgres:9.6-alpine
+                            name: postgres
+                            resources: {}
+                          restartPolicy: Always
+                    status: {}
+              - path: /etc/kubernetes/dt/rabbitmq.deployment
+                  owner: "root:root"
+                  permissions: "0644"
+                  content: |
+                    apiVersion: extensions/v1beta1
+                    kind: Deployment
+                    metadata:
+                      annotations:
+                        kompose.cmd: kompose convert -f /Users/imac/Desktop/untitled folder/docker-compose.yml
+                        kompose.version: 1.16.0 ()
+                      creationTimestamp: null
+                      labels:
+                        io.kompose.service: rabbitmq
+                      name: rabbitmq
+                    spec:
+                      replicas: 1
+                      strategy: {}
+                      template:
+                        metadata:
+                          creationTimestamp: null
+                          labels:
+                            io.kompose.service: rabbitmq
+                        spec:
+                          containers:
+                          - image: library/rabbitmq:latest
+                            name: rabbitmq
+                            ports:
+                            - containerPort: 5672
+                            - containerPort: 15672
+                            resources: {}
+                          restartPolicy: Always
+                    status: {}
+              - path: /etc/kubernetes/dt/rabbitmq.service
+                  owner: "root:root"
+                  permissions: "0644"
+                  content: |
+                    apiVersion: v1
+                    kind: Service
+                    metadata:
+                      annotations:
+                        kompose.cmd: kompose convert -f /Users/imac/Desktop/untitled folder/docker-compose.yml
+                        kompose.version: 1.16.0 ()
+                      creationTimestamp: null
+                      labels:
+                        io.kompose.service: rabbitmq
+                      name: rabbitmq
+                    spec:
+                      ports:
+                      - name: "5672"
+                        port: 5672
+                        targetPort: 5672
+                      - name: "15672"
+                        port: 15672
+                        targetPort: 15672
+                      selector:
+                        io.kompose.service: rabbitmq
+                    status:
+                      loadBalancer: {}
+              - path: /etc/kubernetes/dt/redis.deployment
+                  owner: "root:root"
+                  permissions: "0644"
+                  content: |
+                    apiVersion: extensions/v1beta1
+                    kind: Deployment
+                    metadata:
+                      annotations:
+                        kompose.cmd: kompose convert -f /Users/imac/Desktop/untitled folder/docker-compose.yml
+                        kompose.version: 1.16.0 ()
+                      creationTimestamp: null
+                      labels:
+                        io.kompose.service: redis
+                      name: redis
+                    spec:
+                      replicas: 1
+                      strategy: {}
+                      template:
+                        metadata:
+                          creationTimestamp: null
+                          labels:
+                            io.kompose.service: redis
+                        spec:
+                          containers:
+                          - image: library/redis:latest
+                            name: redis
+                            ports:
+                            - containerPort: 6379
+                            resources: {}
+                          restartPolicy: Always
+                    status: {}
+              - path: /etc/kubernetes/dt/redis.service
+                  owner: "root:root"
+                  permissions: "0644"
+                  content: |
+                    apiVersion: v1
+                    kind: Service
+                    metadata:
+                      annotations:
+                        kompose.cmd: kompose convert -f /Users/imac/Desktop/untitled folder/docker-compose.yml
+                        kompose.version: 1.16.0 ()
+                      creationTimestamp: null
+                      labels:
+                        io.kompose.service: redis
+                      name: redis
+                    spec:
+                      ports:
+                      - name: "6379"
+                        port: 6379
+                        targetPort: 6379
+                      selector:
+                        io.kompose.service: redis
+                    status:
+                      loadBalancer: {}
+              - path: /etc/kubernetes/dt/task-mgmt.deployment
+                  owner: "root:root"
+                  permissions: "0644"
+                  content: |
+                    apiVersion: extensions/v1beta1
+                    kind: Deployment
+                    metadata:
+                      annotations:
+                        kompose.cmd: kompose convert -f /Users/imac/Desktop/untitled folder/docker-compose.yml
+                        kompose.version: 1.16.0 ()
+                      creationTimestamp: null
+                      labels:
+                        io.kompose.service: task-mgmt
+                      name: task-mgmt
+                    spec:
+                      replicas: 1
+                      strategy: {}
+                      template:
+                        metadata:
+                          creationTimestamp: null
+                          labels:
+                            io.kompose.service: task-mgmt
+                        spec:
+                          containers:
+                          - env:
+                            - name: AMQP_URL
+                              value: amqp://guest:guest@rabbitmq:5672/
+                            - name: EMAIL_NOTIFICATION_RECIPIENTS
+                              value: brendan@qri.io
+                            - name: GITHUB_LOGIN_URL
+                              value: http://localhost:3100/oauth/github
+                            - name: GOLANG_ENV
+                              value: develop
+                            - name: IPFS_API_URL
+                              value: http://ipfs:5001/api/v0
+                            - name: PORT
+                              value: "3400"
+                            - name: POSTGRES_DB_URL
+                              value: postgres://postgres@postgres/postgres?sslmode=disable
+                            - name: POSTMARK_KEY
+                              value: POSTMARK_API_TEST
+                            - name: PUBLIC_KEY
+                              value: nothing_yet
+                            - name: REDIS_URL
+                              value: redis:6379
+                            - name: RPC_PORT
+                              value: "4400"
+                            - name: TLS
+                              value: "false"
+                            image: datatogether/task-mgmt:latest
+                            name: task-mgmt
+                            ports:
+                            - containerPort: 3400
+                            - containerPort: 4400
+                            resources: {}
+                          restartPolicy: Always
+                    status: {}
+              - path: /etc/kubernetes/dt/task-mgmt.service
+                  owner: "root:root"
+                  permissions: "0644"
+                  content: |
+                    apiVersion: v1
+                    kind: Service
+                    metadata:
+                      annotations:
+                        kompose.cmd: kompose convert -f /Users/imac/Desktop/untitled folder/docker-compose.yml
+                        kompose.version: 1.16.0 ()
+                      creationTimestamp: null
+                      labels:
+                        io.kompose.service: task-mgmt
+                      name: task-mgmt
+                    spec:
+                      ports:
+                      - name: "3400"
+                        port: 3400
+                        targetPort: 3400
+                      - name: "4400"
+                        port: 4400
+                        targetPort: 4400
+                      selector:
+                        io.kompose.service: task-mgmt
+                    status:
+                      loadBalancer: {}
+  
   kube_examples:
     type: OS::Heat::SoftwareConfig
+    depends_on:
+        - install_etcd
     properties:
       group: ungrouped
       config: |
@@ -517,751 +1341,3 @@ resources:
                       - name: stress
                         image: larsks/stress
                         args: ["--cpu", "1"]
-
-  docker_service:
-    type: OS::Heat::SoftwareConfig
-    properties:
-      group: ungrouped
-      config: |
-        #cloud-config
-        merge_how: dict(recurse_array)+list(append)
-        bootcmd:
-          - mkdir -p /etc/systemd/system/docker.service.d
-          - mkdir -p /etc/systemd/system/flanneld.service.d
-        write_files:
-          - path: /usr/local/bin/flannel-docker-bridge
-            owner: "root:root"
-            permissions: "0755"
-            content: |
-              #!/bin/sh
-              if ! [ "$FLANNEL_SUBNET" ] && [ "$FLANNEL_MTU" ] ; then
-                echo ">> ERROR: missing required environment variables." >&2
-                exit 1
-              fi
-              mkdir -p /run/flannel/
-              cat > /run/flannel/docker <<EOF
-              DOCKER_NETWORK_OPTIONS="--bip=$FLANNEL_SUBNET --mtu=$FLANNEL_MTU"
-              EOF
-          - path: /etc/systemd/system/flannel-docker-bridge.service
-            owner: "root:root"
-            permissions: "0644"
-            content: |
-              [Unit]
-              After=flanneld.service
-              Before=docker.service
-              Requires=flanneld.service
-              [Service]
-              Type=oneshot
-              EnvironmentFile=/run/flannel/subnet.env
-              ExecStart=/usr/local/bin/flannel-docker-bridge
-              [Install]
-              WantedBy=docker.service
-          - path: /etc/systemd/system/docker.service.d/flannel.conf
-            owner: "root:root"
-            permissions: "0644"
-            content: |
-              [Unit]
-              Requires=flannel-docker-bridge.service
-              After=flannel-docker-bridge.service
-              [Service]
-              EnvironmentFile=/run/flannel/docker
-          - path: /etc/systemd/system/flanneld.service.d/flannel-docker-bridge.conf
-            owner: "root:root"
-            permissions: "0644"
-            content: |
-              [Unit]
-              Requires=flannel-docker-bridge.service
-              Before=flannel-docker-bridge.service
-              [Install]
-              Also=flannel-docker-bridge.service
-
-  kube_register:
-    type: "OS::Heat::SoftwareConfig"
-    properties:
-      group: ungrouped
-      config: |
-        #cloud-config
-        merge_how: dict(recurse_array)+list(append)
-        write_files:
-          - path: /usr/local/bin/kube-register
-            permissions: "0755"
-            owner: root
-            content: |
-              #!/bin/sh
-              . /etc/sysconfig/heat-params
-              master_url=http://${KUBE_MASTER_IP}:8080
-              myip=$(ip addr show eth0 |
-                awk '$1 == "inet" {print $2}' | cut -f1 -d/)
-              # wait for master api
-              until curl -o /dev/null -sf "${master_url}/healthz"; do
-                echo ">> Waiting for kubernetes master"
-                sleep 1
-              done
-              if [ "$1" = "-u" ]; then
-              echo ">> Unregistering minion $myip"
-              kubectl -s ${master_url} delete minion/$myip
-              else
-              echo ">> Registering minion $myip"
-              cpu=$(($(nproc) * 1000))
-              memory=$(awk '/MemTotal: /{print $2 * 1024}' /proc/meminfo)
-              cat <<EOF | kubectl create -s ${master_url} -f-
-              apiVersion: v1beta1
-              id: $myip
-              kind: Minion
-              resources:
-                capacity:
-                  cpu: $cpu
-                  memory: $memory
-              EOF
-              fi
-          - path: /etc/systemd/system/kube-register.service
-            permissions: "0644"
-            owner: root
-            content: |
-              [Unit]
-              Description=Register/unregister this node with the Kubernetes master
-              Requires=kubelet.service
-              After=kubelet.service
-              [Service]
-              Type=oneshot
-              RemainAfterExit=yes
-              ExecStart=/usr/local/bin/kube-register
-              ExecStop=/usr/local/bin/kube-register -u
-              [Install]
-              WantedBy=kubelet.service
-
-  add_ons:
-    type: OS::Heat::SoftwareConfig
-    properties:
-      group: ungrouped
-      config: |
-        #!/bin/sh
-        echo ">> Applying Addons"
-        kubectl apply -f https://raw.githubusercontent.com/kubernetes/dashboard/master/src/deploy/recommended/kubernetes-dashboard.yaml
-        kubectl apply -f https://raw.githubusercontent.com/giantswarm/kubernetes-prometheus/master/manifests-all.yaml
-        kubectl get all --all-namespaces=true
-        echo ">> ... END Applying Addons"
-
-  kube_master_init:
-    type: OS::Heat::MultipartMime
-    properties:
-      parts:
-        - config: {get_resource: disable_selinux}
-        - config: {get_resource: atomic_upgrade}
-        - config: {get_resource: install_kubernetes}
-        - config: {get_resource: install_etcd}
-        - config: {get_resource: write_heat_params-master}
-        - config: {get_resource: configure_etcd}
-        - config: {get_resource: kube_user}
-        - config: {get_resource: configure_kubernetes_master}
-        - config: {get_resource: enable_services}
-        - config: {get_resource: write_flannel_config}
-        - config: {get_resource: flannel_config_service}
-        - config: {get_resource: kube_examples}
-        - config: {get_resource: add_ons}
-        - config: {get_resource: kube_dt}
-
-  kube_node_init:
-    type: OS::Heat::MultipartMime
-    properties:
-      parts:
-        - config: {get_resource: disable_selinux}
-        - config: {get_resource: atomic_upgrade}
-        - config: {get_resource: install_kubernetes}
-        - config: {get_resource: write_heat_params}
-        - config: {get_resource: kube_user}
-        - config: {get_resource: kube_examples}
-        - config: {get_resource: configure_docker_storage}
-        - config: {get_resource: kube_register}
-        - config: {get_resource: configure_kubernetes_node}
-        - config: {get_resource: docker_service}
-        - config: {get_resource: enable_services}
-        - config: {get_resource: add_ons}
-
-  k8s_master:
-    type: OS::Nova::Server
-    properties:
-      name: k8s_master
-      image:    { get_param: image   }
-      flavor:   { get_param: flavor  }
-      key_name: { get_param: keyname }
-      networks: 
-      - network: { get_param: network_resource }
-      scheduler_hints: { group: { get_resource: server_group } }
-      metadata: 
-        kube_group: k8scluster,vault,nofloating
-      user_data_format: RAW
-      user_data: {get_resource: kube_master_init}
-
-  k8s_node:
-    type: OS::Heat::AutoScalingGroup
-    properties:
-      min_size: 1
-      desired_capacity: { get_param: k8s_node_count }
-      max_size: 6
-      resource:
-        type: OS::Nova::Server
-        properties:
-          image:    { get_param: image   }
-          flavor:   { get_param: flavor  }
-          key_name: { get_param: keyname }
-          networks: 
-          - network: { get_param: network_resource }
-          scheduler_hints: { group: { get_resource: server_group } }
-          metadata: 
-            kube_group: k8snode,k8scluster,nofloating
-          user_data_format: RAW
-          user_data: {get_resource: kube_node_init}
-
-  server_group:
-    type: OS::Nova::ServerGroup
-    properties:
-      name: nova-server-group
-
-  scale_up_policy:
-    type: OS::Heat::ScalingPolicy
-    properties:
-      adjustment_type: change_in_capacity
-      auto_scaling_group_id: { get_resource: k8s_node }
-      cooldown: {get_param: scale_up_cooldown}
-      scaling_adjustment: 1
-
-  scale_down_policy:
-    type: OS::Heat::ScalingPolicy
-    properties:
-      adjustment_type: change_in_capacity
-      auto_scaling_group_id: { get_resource: k8s_node }
-      cooldown: {get_param: scale_down_cooldown}
-      scaling_adjustment: -1
-
-  kube_dt:
-    type: OS::Heat::SoftwareConfig
-    properties:
-      group: ungrouped
-      config: |
-        #cloud-config
-        write_files:
-          - path: /etc/kubernetes/dt/context.claim
-            owner: "root:root"
-            permissions: "0644"
-            content: |
-              apiVersion: v1
-              kind: PersistentVolumeClaim
-              metadata:
-                creationTimestamp: null
-                labels:
-                  io.kompose.service: context-claim0
-                name: context-claim0
-              spec:
-                accessModes:
-                - ReadWriteOnce
-                resources:
-                  requests:
-                    storage: 100Mi
-              status: {}
-          - path: /etc/kubernetes/dt/context.deployment
-            owner: "root:root"
-            permissions: "0644"
-            content: |
-              apiVersion: extensions/v1beta1
-              kind: Deployment
-              metadata:
-                annotations:
-                  kompose.cmd: kompose convert -f /Users/imac/Desktop/untitled folder/docker-compose.yml
-                  kompose.version: 1.16.0 ()
-                creationTimestamp: null
-                labels:
-                  io.kompose.service: context
-                name: context
-              spec:
-                replicas: 1
-                strategy:
-                  type: Recreate
-                template:
-                  metadata:
-                    creationTimestamp: null
-                    labels:
-                      io.kompose.service: context
-                  spec:
-                    containers:
-                    - image: context
-                      name: context
-                      ports:
-                      - containerPort: 4000
-                      resources: {}
-                      volumeMounts:
-                      - mountPath: /home/context/src
-                        name: context-claim0
-                    restartPolicy: Always
-                    volumes:
-                    - name: context-claim0
-                      persistentVolumeClaim:
-                        claimName: context-claim0
-              status: {}
-          - path: /etc/kubernetes/dt/context.service
-            owner: "root:root"
-            permissions: "0644"
-            content: |
-              apiVersion: v1
-              kind: Service
-              metadata:
-                annotations:
-                  kompose.cmd: kompose convert -f /Users/imac/Desktop/untitled folder/docker-compose.yml
-                  kompose.version: 1.16.0 ()
-                creationTimestamp: null
-                labels:
-                  io.kompose.service: context
-                name: context
-              spec:
-                ports:
-                - name: "4000"
-                  port: 4000
-                  targetPort: 4000
-                selector:
-                  io.kompose.service: context
-              status:
-                loadBalancer: {}             
-          - path: /etc/kubernetes/dt/identity.deployment
-            owner: "root:root"
-            permissions: "0644"
-            content: |
-              apiVersion: extensions/v1beta1
-              kind: Deployment
-              metadata:
-                annotations:
-                  kompose.cmd: kompose convert -f /Users/imac/Desktop/untitled folder/docker-compose.yml
-                  kompose.version: 1.16.0 ()
-                creationTimestamp: null
-                labels:
-                  io.kompose.service: identity
-                name: identity
-              spec:
-                replicas: 1
-                strategy: {}
-                template:
-                  metadata:
-                    creationTimestamp: null
-                    labels:
-                      io.kompose.service: identity
-                  spec:
-                    containers:
-                    - env:
-                      - name: ALLOWED_ORIGINS
-                        value: http://localhost:3000
-                      - name: GOLANG_ENV
-                        value: develop
-                      - name: PORT
-                        value: "3100"
-                      - name: POSTGRES_DB_URL
-                        value: postgres://postgres@postgres/postgres?sslmode=disable
-                      - name: PRIVATE_KEY
-                        value: |
-                          -----BEGIN RSA PRIVATE KEY-----
-                          MIIBOwIBAAJBAMOsqD9mC5mWC4Fa5rTU3Zaq+ZWIgEzwC0nkkPMLVAfJpkFI7uiy
-                          CIj5n6OuPCDGNJTzXMjJsBd1YhUqzg2XnAsCAwEAAQJAF8Qoy0qBri3jR9ramqwg
-                          HeS2W8swiie9t0PjtyFxG2DUP6ENDgodWzrA+WJD5dJSlkWUlwgCUJ3jk/vK3eOJ
-                          AQIhAOi5Y0dUpR8GVQX7YeIDug4N39T2FnYxB1XdH5GKX/fxAiEA1z6oRREeTGTL
-                          ULZYRkyz41tVC+uCTGeUw1i9UMi8b7sCIQDRP49CXZsx8BGWlVaHT26EoHj3FGVR
-                          0/eSfoWZ6N8tIQIhAI2y6gPN6SxRjqdr42EkTah3D93xBK5X4k9XtAninGrRAiB7
-                          k4uJgqHl8hgs3bndGibFuepdLWJed7YXa+eF57FdmA==
-                          -----END RSA PRIVATE KEY-----
-                      - name: PUBLIC_KEY
-                        value: |
-                          -----BEGIN PUBLIC KEY-----
-                          MFwwDQYJKoZIhvcNAQEBBQADSwAwSAJBAMOsqD9mC5mWC4Fa5rTU3Zaq+ZWIgEzw
-                          C0nkkPMLVAfJpkFI7uiyCIj5n6OuPCDGNJTzXMjJsBd1YhUqzg2XnAsCAwEAAQ==
-                          -----END PUBLIC KEY-----
-                      image: datatogether/identity:latest
-                      name: identity
-                      ports:
-                      - containerPort: 3100
-                      resources: {}
-                    restartPolicy: Always
-              status: {}
-          - path: /etc/kubernetes/dt/identity.service
-            owner: "root:root"
-            permissions: "0644"
-            content: |
-              apiVersion: v1
-              kind: Service
-              metadata:
-                annotations:
-                  kompose.cmd: kompose convert -f /Users/imac/Desktop/untitled folder/docker-compose.yml
-                  kompose.version: 1.16.0 ()
-                creationTimestamp: null
-                labels:
-                  io.kompose.service: identity
-                name: identity
-              spec:
-                ports:
-                - name: "3100"
-                  port: 3100
-                  targetPort: 3100
-                selector:
-                  io.kompose.service: identity
-              status:
-                loadBalancer: {}
-          - path: /etc/kubernetes/dt/ipfs.deployment
-              owner: "root:root"
-              permissions: "0644"
-              content: |
-                apiVersion: extensions/v1beta1
-                kind: Deployment
-                metadata:
-                  annotations:
-                    kompose.cmd: kompose convert -f /Users/imac/Desktop/untitled folder/docker-compose.yml
-                    kompose.version: 1.16.0 ()
-                  creationTimestamp: null
-                  labels:
-                    io.kompose.service: ipfs
-                  name: ipfs
-                spec:
-                  replicas: 1
-                  strategy: {}
-                  template:
-                    metadata:
-                      creationTimestamp: null
-                      labels:
-                        io.kompose.service: ipfs
-                    spec:
-                      containers:
-                      - image: ipfs/go-ipfs:latest
-                        name: ipfs
-                        ports:
-                        - containerPort: 5001
-                        resources: {}
-                      restartPolicy: Always
-                status: {}
-          - path: /etc/kubernetes/dt/ipfs.service
-              owner: "root:root"
-              permissions: "0644"
-              content: |
-                  apiVersion: v1
-                  kind: Service
-                  metadata:
-                    annotations:
-                      kompose.cmd: kompose convert -f /Users/imac/Desktop/untitled folder/docker-compose.yml
-                      kompose.version: 1.16.0 ()
-                    creationTimestamp: null
-                    labels:
-                      io.kompose.service: ipfs
-                    name: ipfs
-                  spec:
-                    ports:
-                    - name: "5001"
-                      port: 5001
-                      targetPort: 5001
-                    selector:
-                      io.kompose.service: ipfs
-                  status:
-                    loadBalancer: {}              
-          - path: /etc/kubernetes/dt/patchbay.deployment
-              owner: "root:root"
-              permissions: "0644"
-              content: |
-                apiVersion: extensions/v1beta1
-                kind: Deployment
-                metadata:
-                  annotations:
-                    kompose.cmd: kompose convert -f /Users/imac/Desktop/untitled folder/docker-compose.yml
-                    kompose.version: 1.16.0 ()
-                  creationTimestamp: null
-                  labels:
-                    io.kompose.service: patchbay
-                  name: patchbay
-                spec:
-                  replicas: 1
-                  strategy: {}
-                  template:
-                    metadata:
-                      creationTimestamp: null
-                      labels:
-                        io.kompose.service: patchbay
-                    spec:
-                      containers:
-                      - env:
-                        - name: GOLANG_ENV
-                          value: develop
-                        - name: PORT
-                          value: "3000"
-                        - name: POSTGRES_DB_URL
-                          value: postgres://postgres@postgres/postgres?sslmode=disable
-                        - name: PRIVATE_KEY
-                          value: |
-                            -----BEGIN RSA PRIVATE KEY-----
-                            MIIBOwIBAAJBAMOsqD9mC5mWC4Fa5rTU3Zaq+ZWIgEzwC0nkkPMLVAfJpkFI7uiy
-                            CIj5n6OuPCDGNJTzXMjJsBd1YhUqzg2XnAsCAwEAAQJAF8Qoy0qBri3jR9ramqwg
-                            HeS2W8swiie9t0PjtyFxG2DUP6ENDgodWzrA+WJD5dJSlkWUlwgCUJ3jk/vK3eOJ
-                            AQIhAOi5Y0dUpR8GVQX7YeIDug4N39T2FnYxB1XdH5GKX/fxAiEA1z6oRREeTGTL
-                            ULZYRkyz41tVC+uCTGeUw1i9UMi8b7sCIQDRP49CXZsx8BGWlVaHT26EoHj3FGVR
-                            0/eSfoWZ6N8tIQIhAI2y6gPN6SxRjqdr42EkTah3D93xBK5X4k9XtAninGrRAiB7
-                            k4uJgqHl8hgs3bndGibFuepdLWJed7YXa+eF57FdmA==
-                            -----END RSA PRIVATE KEY-----
-                        - name: PUBLIC_KEY
-                          value: |
-                            -----BEGIN PUBLIC KEY-----
-                            MFwwDQYJKoZIhvcNAQEBBQADSwAwSAJBAMOsqD9mC5mWC4Fa5rTU3Zaq+ZWIgEzw
-                            C0nkkPMLVAfJpkFI7uiyCIj5n6OuPCDGNJTzXMjJsBd1YhUqzg2XnAsCAwEAAQ==
-                            -----END PUBLIC KEY-----
-                        - name: REDIS_URL
-                          value: redis:6379
-                        - name: TASKS_SERVICE_URL
-                          value: task-mgmt:4400
-                        - name: TITLE
-                          value: Data Together
-                        - name: WEBAPP_SCRIPTS
-                          value: http://localhost:4000/static/bundle.js
-                        image: datatogether/patchbay:latest
-                        name: patchbay
-                        ports:
-                        - containerPort: 3000
-                        resources: {}
-                      restartPolicy: Always
-                status: {}
-          - path: /etc/kubernetes/dt/patchbay.service
-              owner: "root:root"
-              permissions: "0644"
-              content: |
-                apiVersion: v1
-                kind: Service
-                metadata:
-                  annotations:
-                    kompose.cmd: kompose convert -f /Users/imac/Desktop/untitled folder/docker-compose.yml
-                    kompose.version: 1.16.0 ()
-                  creationTimestamp: null
-                  labels:
-                    io.kompose.service: patchbay
-                  name: patchbay
-                spec:
-                  ports:
-                  - name: "3000"
-                    port: 3000
-                    targetPort: 3000
-                  selector:
-                    io.kompose.service: patchbay
-                status:
-                  loadBalancer: {}
-          - path: /etc/kubernetes/dt/postgres.deployment
-              owner: "root:root"
-              permissions: "0644"
-              content: |
-                apiVersion: extensions/v1beta1
-                kind: Deployment
-                metadata:
-                  annotations:
-                    kompose.cmd: kompose convert -f /Users/imac/Desktop/untitled folder/docker-compose.yml
-                    kompose.version: 1.16.0 ()
-                  creationTimestamp: null
-                  labels:
-                    io.kompose.service: postgres
-                  name: postgres
-                spec:
-                  replicas: 1
-                  strategy: {}
-                  template:
-                    metadata:
-                      creationTimestamp: null
-                      labels:
-                        io.kompose.service: postgres
-                    spec:
-                      containers:
-                      - image: postgres:9.6-alpine
-                        name: postgres
-                        resources: {}
-                      restartPolicy: Always
-                status: {}
-          - path: /etc/kubernetes/dt/rabbitmq.deployment
-              owner: "root:root"
-              permissions: "0644"
-              content: |
-                apiVersion: extensions/v1beta1
-                kind: Deployment
-                metadata:
-                  annotations:
-                    kompose.cmd: kompose convert -f /Users/imac/Desktop/untitled folder/docker-compose.yml
-                    kompose.version: 1.16.0 ()
-                  creationTimestamp: null
-                  labels:
-                    io.kompose.service: rabbitmq
-                  name: rabbitmq
-                spec:
-                  replicas: 1
-                  strategy: {}
-                  template:
-                    metadata:
-                      creationTimestamp: null
-                      labels:
-                        io.kompose.service: rabbitmq
-                    spec:
-                      containers:
-                      - image: library/rabbitmq:latest
-                        name: rabbitmq
-                        ports:
-                        - containerPort: 5672
-                        - containerPort: 15672
-                        resources: {}
-                      restartPolicy: Always
-                status: {}
-          - path: /etc/kubernetes/dt/rabbitmq.service
-              owner: "root:root"
-              permissions: "0644"
-              content: |
-                apiVersion: v1
-                kind: Service
-                metadata:
-                  annotations:
-                    kompose.cmd: kompose convert -f /Users/imac/Desktop/untitled folder/docker-compose.yml
-                    kompose.version: 1.16.0 ()
-                  creationTimestamp: null
-                  labels:
-                    io.kompose.service: rabbitmq
-                  name: rabbitmq
-                spec:
-                  ports:
-                  - name: "5672"
-                    port: 5672
-                    targetPort: 5672
-                  - name: "15672"
-                    port: 15672
-                    targetPort: 15672
-                  selector:
-                    io.kompose.service: rabbitmq
-                status:
-                  loadBalancer: {}
-          - path: /etc/kubernetes/dt/redis.deployment
-              owner: "root:root"
-              permissions: "0644"
-              content: |
-                apiVersion: extensions/v1beta1
-                kind: Deployment
-                metadata:
-                  annotations:
-                    kompose.cmd: kompose convert -f /Users/imac/Desktop/untitled folder/docker-compose.yml
-                    kompose.version: 1.16.0 ()
-                  creationTimestamp: null
-                  labels:
-                    io.kompose.service: redis
-                  name: redis
-                spec:
-                  replicas: 1
-                  strategy: {}
-                  template:
-                    metadata:
-                      creationTimestamp: null
-                      labels:
-                        io.kompose.service: redis
-                    spec:
-                      containers:
-                      - image: library/redis:latest
-                        name: redis
-                        ports:
-                        - containerPort: 6379
-                        resources: {}
-                      restartPolicy: Always
-                status: {}
-          - path: /etc/kubernetes/dt/redis.service
-              owner: "root:root"
-              permissions: "0644"
-              content: |
-                apiVersion: v1
-                kind: Service
-                metadata:
-                  annotations:
-                    kompose.cmd: kompose convert -f /Users/imac/Desktop/untitled folder/docker-compose.yml
-                    kompose.version: 1.16.0 ()
-                  creationTimestamp: null
-                  labels:
-                    io.kompose.service: redis
-                  name: redis
-                spec:
-                  ports:
-                  - name: "6379"
-                    port: 6379
-                    targetPort: 6379
-                  selector:
-                    io.kompose.service: redis
-                status:
-                  loadBalancer: {}
-          - path: /etc/kubernetes/dt/task-mgmt.deployment
-              owner: "root:root"
-              permissions: "0644"
-              content: |
-                apiVersion: extensions/v1beta1
-                kind: Deployment
-                metadata:
-                  annotations:
-                    kompose.cmd: kompose convert -f /Users/imac/Desktop/untitled folder/docker-compose.yml
-                    kompose.version: 1.16.0 ()
-                  creationTimestamp: null
-                  labels:
-                    io.kompose.service: task-mgmt
-                  name: task-mgmt
-                spec:
-                  replicas: 1
-                  strategy: {}
-                  template:
-                    metadata:
-                      creationTimestamp: null
-                      labels:
-                        io.kompose.service: task-mgmt
-                    spec:
-                      containers:
-                      - env:
-                        - name: AMQP_URL
-                          value: amqp://guest:guest@rabbitmq:5672/
-                        - name: EMAIL_NOTIFICATION_RECIPIENTS
-                          value: brendan@qri.io
-                        - name: GITHUB_LOGIN_URL
-                          value: http://localhost:3100/oauth/github
-                        - name: GOLANG_ENV
-                          value: develop
-                        - name: IPFS_API_URL
-                          value: http://ipfs:5001/api/v0
-                        - name: PORT
-                          value: "3400"
-                        - name: POSTGRES_DB_URL
-                          value: postgres://postgres@postgres/postgres?sslmode=disable
-                        - name: POSTMARK_KEY
-                          value: POSTMARK_API_TEST
-                        - name: PUBLIC_KEY
-                          value: nothing_yet
-                        - name: REDIS_URL
-                          value: redis:6379
-                        - name: RPC_PORT
-                          value: "4400"
-                        - name: TLS
-                          value: "false"
-                        image: datatogether/task-mgmt:latest
-                        name: task-mgmt
-                        ports:
-                        - containerPort: 3400
-                        - containerPort: 4400
-                        resources: {}
-                      restartPolicy: Always
-                status: {}
-          - path: /etc/kubernetes/dt/task-mgmt.service
-              owner: "root:root"
-              permissions: "0644"
-              content: |
-                apiVersion: v1
-                kind: Service
-                metadata:
-                  annotations:
-                    kompose.cmd: kompose convert -f /Users/imac/Desktop/untitled folder/docker-compose.yml
-                    kompose.version: 1.16.0 ()
-                  creationTimestamp: null
-                  labels:
-                    io.kompose.service: task-mgmt
-                  name: task-mgmt
-                spec:
-                  ports:
-                  - name: "3400"
-                    port: 3400
-                    targetPort: 3400
-                  - name: "4400"
-                    port: 4400
-                    targetPort: 4400
-                  selector:
-                    io.kompose.service: task-mgmt
-                status:
-                  loadBalancer: {}
