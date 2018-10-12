@@ -139,7 +139,7 @@ parameters:
 
 resources:
   ########################################
-  ##  Software Configurations Parts
+  ##  Software Configurations Parts: Version 1
   ########################################
 
   ### STAGE 1
@@ -670,6 +670,56 @@ resources:
         whoami
         echo "------------------------------------------------------"
 
+
+  ########################################
+  ##  Software Configurations Parts: Using KubeAdm
+  ########################################
+
+  k_master_node:
+    type: OS::Heat::SoftwareConfig
+    properties:
+      group: ungrouped
+      config: |
+        #!/bin/sh
+        cat <<EOF > /etc/yum.repos.d/kubernetes.repo
+        [kubernetes]
+        name=Kubernetes
+        baseurl=https://packages.cloud.google.com/yum/repos/kubernetes-el7-x86_64
+        enabled=1
+        gpgcheck=1
+        repo_gpgcheck=1
+        gpgkey=https://packages.cloud.google.com/yum/doc/yum-key.gpg
+                https://packages.cloud.google.com/yum/doc/rpm-package-key.gpg
+        EOF
+        setenforce 0
+        dnf install -y docker kubelet kubeadm kubectl kubernetes
+        systemctl enable --now docker kubelet
+        kubeadm init --pod-network-cidr=10.244.0.0/16
+        kubectl apply -f https://raw.githubusercontent.com/coreos/flannel/master/Documentation/kube-flannel.yml
+        watch kubectl get pods --all-namespaces
+
+  k_minion_node:
+    type: OS::Heat::SoftwareConfig
+    depends_on:
+      - docker_service
+    properties:
+      group: ungrouped
+      config: |
+        #!/bin/sh
+        cat <<EOF > /etc/yum.repos.d/kubernetes.repo
+        [kubernetes]
+        name=Kubernetes
+        baseurl=https://packages.cloud.google.com/yum/repos/kubernetes-el7-x86_64
+        enabled=1
+        gpgcheck=1
+        repo_gpgcheck=1
+        gpgkey=https://packages.cloud.google.com/yum/doc/yum-key.gpg
+                https://packages.cloud.google.com/yum/doc/rpm-package-key.gpg
+        EOF
+        setenforce 0
+        dnf install -y docker kubelet kubeadm kubectl kubernetes
+        systemctl enable --now docker kubelet
+        echo "use kubeadm join... in command line"
   ########################################
   ##  Software Configurations Init
   ########################################
@@ -688,9 +738,9 @@ resources:
         - config: {get_resource: enable_services_master}
         - config: {get_resource: write_flannel_config}
         - config: {get_resource: flannel_config_service}
-        #- config: {get_resource: kube_examples}
+        - config: {get_resource: kube_examples}
         - config: {get_resource: add_ons}
-        #- config: {get_resource: kube_dt}
+        - config: {get_resource: kube_dt}
         - config: {get_resource: check_up}
 
   kube_node_init:
@@ -702,7 +752,7 @@ resources:
         - config: {get_resource: install_kubernetes}
         - config: {get_resource: write_heat_params_node}
         - config: {get_resource: kube_user}
-        #- config: {get_resource: kube_examples}
+        - config: {get_resource: kube_examples}
         - config: {get_resource: configure_docker_storage}
         - config: {get_resource: kube_register}
         - config: {get_resource: configure_kubernetes_node}
@@ -725,8 +775,9 @@ resources:
       scheduler_hints: { group: { get_resource: server_group } }
       metadata: 
         kube_group: k8scluster,vault,nofloating
-      user_data_format: RAW
-      user_data: {get_resource: kube_master_init}
+      #user_data_format: RAW
+      #user_data: {get_resource: k_master_node}
+      #user_data: {get_resource: kube_master_init_with_kubeadm_ubun}
 
   k8s_node:
     type: OS::Heat::AutoScalingGroup
@@ -745,8 +796,11 @@ resources:
           scheduler_hints: { group: { get_resource: server_group } }
           metadata: 
             kube_group: k8snode,k8scluster,nofloating
-          user_data_format: RAW
-          user_data: {get_resource: kube_node_init}
+          #user_data_format: RAW
+          #user_data: {get_resource: install_packages}
+          #user_data: {get_resource: kube_node_init_with_kubeadm_ubun}
+
+
   ########################################
   ##  Kubernetes Node Services Examples
   ########################################

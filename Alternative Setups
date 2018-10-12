@@ -1,0 +1,141 @@
+  ### ALTERNATIVE 1
+  common:
+    type: OS::Heat::SoftwareConfig
+    properties:
+      group: ungrouped
+      config: |
+        #cloud-config
+        packages:
+          - git
+        package_reboot_if_required: false
+        manage_resolv_conf: true
+        runcmd:
+          - echo "127.0.0.1 $(hostname)" | sudo tee -a /etc/hosts
+        write_files:
+          - path: /tmp/install.sh
+            permissions: 0755
+            content: |
+              #!/bin/bash
+              git clone https://github.com/data-8/kubeadm-bootstrap.git /tmp/kubeadm-bootstrap
+              cd /tmp/kubeadm-bootstrap
+              sudo ./install-kubeadm.bash
+        disable_ec2_metadata: true
+        timezone: "America/Montreal"
+        output: { all: "| tee -a /var/log/cloud-init-output.log" }
+
+  master:
+    type: OS::Heat::SoftwareConfig
+    properties:
+      group: ungrouped
+      config: |
+        #cloud-config
+        packages:
+          - nfs-kernel-server
+        runcmd:
+          # NFS
+          - echo "/shared `hostname -I | awk '{print $1}' | grep -Po '(\d+\.){3}'`0/24(rw,sync,no_root_squash,no_all_squash)" > /etc/exports
+          - mkdir -p /shared
+          - chown ${admin_user} /shared
+          - systemctl enable nfs-kernel-server
+          - systemctl restart nfs-kernel-server
+          # Kubeadm  
+          - echo "SUDO_UID=${admin_user} sudo -E /tmp/kubeadm-bootstrap/init-master.bash" >> /tmp/install.sh
+          - su ${admin_user} -c "/tmp/install.sh"
+          - kubeadm token create --print-join-command > /shared/kubeadm-join.bash
+          - kubectl label nodes `hostname` type=production  
+
+  node:
+    type: OS::Heat::SoftwareConfig
+    properties:
+      group: ungrouped
+      config: |
+        #cloud-config
+        packages:
+          - nfs-common
+        runcmd:
+          # NFS
+          - mkdir -p /shared
+          - echo "${master_ip}:/shared      /shared      nfs rw,noatime,nolock,hard,tcp 0 0" >> /etc/fstab
+          - mount -a
+          # Kubeadm  
+          - echo "while [ ! -f /shared/kubeadm-join.bash ]; do sleep 1; done; sudo bash /shared/kubeadm-join.bash" >> /tmp/install.sh
+          - su ${admin_user} -c "/tmp/install.sh"
+
+  ### ALTERNATIVE 2
+  master_fed:
+    type: OS::Heat::SoftwareConfig
+    properties:
+      group: ungrouped
+      config: |
+        #!/bin/sh
+        sudo atomic host upgrade --reboot
+        atomic install --system --system-package=no --name kube-apiserver registry.fedoraproject.org/f26/kubernetes-apiserver
+        atomic install --system --system-package=no --name kube-controller-manager registry.fedoraproject.org/f26/kubernetes-controller-manager
+        atomic install --system --system-package=no --name kube-scheduler registry.fedoraproject.org/f26/kubernetes-scheduler
+
+  node_fed:
+    type: OS::Heat::SoftwareConfig
+    properties:
+      group: ungrouped
+      config: |
+        #!/bin/sh
+        sudo atomic host upgrade --reboot
+        atomic install --system --system-package=no --name kubelet registry.fedoraproject.org/f26/kubernetes-kubelet
+        atomic install --system --system-package=no --name kubelet registry.fedoraproject.org/f26/kubernetes-kubelet
+
+  ### ALTERNATIVE 3
+  master_fed:
+    type: OS::Heat::SoftwareConfig
+    properties:
+      group: ungrouped
+      config: |
+        apt-get update && apt-get install -y apt-transport-https curl
+        curl -s https://packages.cloud.google.com/apt/doc/apt-key.gpg | apt-key add -
+        cat <<EOF >/etc/apt/sources.list.d/kubernetes.list
+        deb http://apt.kubernetes.io/ kubernetes-xenial main
+        EOF
+        apt-get update
+        apt-get install -y kubelet kubeadm kubectl
+        apt-mark hold kubelet kubeadm kubectl
+        systemctl daemon-reload
+        systemctl restart kubelet
+        kubeadm config images pull
+        kubeadm init
+
+  master_fed:
+    type: OS::Heat::SoftwareConfig
+    properties:
+      group: ungrouped
+      config: |
+
+
+
+
+
+  ## ALTERNATIVE 1
+  kube_master_init_with_kubeadm_ubun:
+    type: OS::Heat::MultipartMime
+    properties:
+      parts:
+        - config: {get_resource: common}
+        - config: {get_resource: master}
+
+  kube_node_init_with_kubeadm_ubun:
+    type: OS::Heat::MultipartMime
+    properties:
+      parts:
+        - config: {get_resource: common}
+        - config: {get_resource: master}
+
+  ## ALTERNATIVE 2
+  kube_master_init_with_kubeadm_fed:
+    type: OS::Heat::MultipartMime
+    properties:
+      parts:
+        - config: {get_resource:master_fed:}
+
+  kube_node_init_with_kubeadm_fed:
+    type: OS::Heat::MultipartMime
+    properties:
+      parts:
+        - config: {get_resource:node_fed:}
