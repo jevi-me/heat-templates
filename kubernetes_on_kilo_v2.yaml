@@ -309,7 +309,7 @@ resources:
       parts:
         - config: {get_resource: disable_selinux}
         - config: {get_resource: atomic_upgrade}
-        - config: {get_resource: install_packages_master
+        - config: {get_resource: install_packages_master}
         - config: {get_resource: configure_etcd_master}
         - config: {get_resource: configure_kubernetes_master}
         - config: {get_resource: configure_flannel_master}
