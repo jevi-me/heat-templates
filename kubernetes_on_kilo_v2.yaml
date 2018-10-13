@@ -147,8 +147,8 @@ resources:
       config: |
         #cloud-boothook
         #!/bin/sh
-        sudo setenforce 0
-        sudo sed -i '
+        setenforce 0
+        sed -i '
           /^SELINUX=/ s/=.*/=permissive/
         ' /etc/selinux/config
 
@@ -204,7 +204,7 @@ resources:
             { rm -rf /var/lib/cloud/instances/*;
               rpm-ostree upgrade > /var/log/ostree-upgrade.log 2>&1;
               touch /etc/upgrade-flag;
-              reboot; }        
+              reboot; }      
 
   ### STAGE 3
   install_kubernetes:
@@ -280,9 +280,8 @@ resources:
       group: ungrouped
       config: |
         #!/bin/sh
-        echo ">> START Configure ETCD"
-        myip=$(ip addr show eth0 | awk '$1 == "inet" {print $2}' | cut -f1 -d/)
-        echo "myip:" $myip
+        myip=$(ip addr show eth0 |
+        awk '$1 == "inet" {print $2}' | cut -f1 -d/)
         cat > /etc/etcd/etcd.conf <<EOF
         # [member]
         ETCD_NAME=default
@@ -291,7 +290,6 @@ resources:
         [cluster]
         ETCD_ADVERTISE_CLIENT_URLS="http://$myip:4001"
         EOF
-        echo ">> ... END Configure ETCD"
 
   ### STAGE 6
   kube_register:
@@ -315,14 +313,14 @@ resources:
                 awk '$1 == "inet" {print $2}' | cut -f1 -d/)
               # wait for master api
               until curl -o /dev/null -sf "${master_url}/healthz"; do
-                echo ">> Waiting for kubernetes master"
+                echo "waiting for kubernetes master"
                 sleep 1
               done
               if [ "$1" = "-u" ]; then
-              echo ">> Unregistering minion $myip"
+              echo "unregistering minion $myip"
               kubectl -s ${master_url} delete minion/$myip
               else
-              echo ">> Registering minion $myip"
+              echo "registering minion $myip"
               cpu=$(($(nproc) * 1000))
               memory=$(awk '/MemTotal: /{print $2 * 1024}' /proc/meminfo)
               cat <<EOF | kubectl create -s ${master_url} -f-
@@ -351,6 +349,7 @@ resources:
               [Install]
               WantedBy=kubelet.service
 
+
   configure_docker_storage:
     type: OS::Heat::SoftwareConfig
     depends_on:
@@ -358,19 +357,18 @@ resources:
     properties:
       group: ungrouped
       config: |
-        #!/bin/sh
-        echo ">> Configuring Docker Storage"
+        #!/bin/bash
         . /etc/sysconfig/heat-params
         DOCKER_DEV=/dev/disk/by-id/virtio-${DOCKER_VOLUME:0:20}
         attempts=60
         while [[ ! -b $DOCKER_DEV && $attempts != 0 ]]; do
-          echo ">> Waiting for disk $DOCKER_DEV"
+          echo "waiting for disk $DOCKER_DEV"
           sleep 0.5
           udevadm trigger
           let attempts--
         done
         if ! [ -b $DOCKER_DEV ]; then
-          echo ">> ERROR: device $DOCKER_DEV does not exist" >&2
+          echo "ERROR: device $DOCKER_DEV does not exist" >&2
           exit 1
         fi
         pvcreate $DOCKER_DEV
@@ -378,7 +376,6 @@ resources:
         cat > /etc/sysconfig/docker-storage-setup <<EOF
         VG=docker
         EOF
-        echo ">> ... END Configuring Docker Storage"
 
   configure_kubernetes_master:
     type: OS::Heat::SoftwareConfig
@@ -389,7 +386,7 @@ resources:
       config: |
         #!/bin/sh
         . /etc/sysconfig/heat-params
-        echo ">> Configuring kubernetes (master)"
+        echo "configuring kubernetes (master)"
         sed -i '
           /^KUBE_ALLOW_PRIV=/ s/=.*/="--allow_privileged='"$KUBE_ALLOW_PRIV"'"/
         ' /etc/kubernetes/config
@@ -400,7 +397,6 @@ resources:
         sed -i '
           /^KUBELET_ADDRESSES=/ s/=.*/="--machines='""'"/
         ' /etc/kubernetes/controller-manager
-        echo ">>  ... END Configuring kubernetes (master)"
 
   configure_kubernetes_node:
     type: OS::Heat::SoftwareConfig
@@ -443,7 +439,6 @@ resources:
       group: ungrouped
       config: |
         #!/bin/sh
-        echo ">> Write Flannel Config"
         . /etc/sysconfig/heat-params
         . /etc/sysconfig/flanneld
         FLANNEL_JSON=/etc/sysconfig/flannel-network.json
@@ -468,7 +463,6 @@ resources:
         cat >> $FLANNEL_JSON <<EOF
         }
         EOF
-        echo ">> ... END Flannel Config"
 
   ### STAGE 7
   flannel_config_service:
@@ -487,20 +481,19 @@ resources:
             permissions: "0755"
             content: |
               #!/bin/sh
-              echo ">> Starting Flannel Config"
               : ${FLANNEL_JSON:=/etc/sysconfig/flannel-network.json}
               if ! [ -f "$FLANNEL_JSON" ]; then
-                echo ">> ERROR: missing network configuration file" >&2
+                echo "ERROR: missing network configuration file" >&2
                 exit 1
               fi
               if ! [ "$FLANNEL_ETCD" ] && [ "$FLANNEL_ETCD_KEY" ]; then
-                echo ">> ERROR: missing required configuration" >&2
+                echo "ERROR: missing required configuration" >&2
                 exit 1
               fi
-              echo ">> Creating flanneld config in etcd"
+              echo "creating flanneld config in etcd"
               while ! curl -sf -L $FLANNEL_ETCD/v2/keys${FLANNEL_ETCD_KEY}/config \
                 -X PUT --data-urlencode value@${FLANNEL_JSON}; do
-                  echo ">> Waiting for etcd"
+                  echo "waiting for etcd"
                   sleep 1
               done
           - path: /etc/systemd/system/flannel-config.service
@@ -591,13 +584,13 @@ resources:
         #!/bin/sh
         # make sure we pick up any modified unit files
         systemctl daemon-reload
-        echo ">> Starting services"
-        for service in etcd kube-apiserver kube-scheduler kube-controller-manager kube-proxy flanneld; do
-          echo ">> Activating service $service"
+        echo starting services
+        for service in etcd kube-apiserver kube-scheduler kube-controller-manager flanneld kube-proxy; do
+          echo "activating service $service"
           systemctl enable $service
           systemctl --no-block start $service
         done
-        echo ">> ... Completed starting services"
+
 
   enable_services_node:
     type: OS::Heat::SoftwareConfig
@@ -666,7 +659,6 @@ resources:
         echo "------------------------------------------------------"
         hostname
         echo "------------------------------------------------------"
-
 
   ########################################
   ##  Software Config Init
