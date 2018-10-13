@@ -139,7 +139,7 @@ resources:
   ##  Software Config Parts
   ########################################
 
-  ### STAGE 1
+  ### STAGE 1 - Added "swapoff -a"
   disable_selinux:
     type: OS::Heat::SoftwareConfig
     properties:
@@ -152,6 +152,7 @@ resources:
         sudo sed -i '
           /^SELINUX=/ s/=.*/=permissive/
         ' /etc/selinux/config
+        swapoff -a 
         echo ">> ... END Disable SELINUX"
 
   scale_up_policy:
@@ -747,6 +748,7 @@ resources:
     properties:
       group: ungrouped
       config: |
+        #cloud-init
         - hosts: all
           become: yes
           tasks:
@@ -790,6 +792,7 @@ resources:
     properties:
       group: ungrouped
       config: |
+        #cloud-init
         - hosts: master
             become: yes
             tasks:
@@ -824,6 +827,7 @@ resources:
     properties:
       group: ungrouped
       config: |
+        #cloud-init
         - hosts: master
           become: yes
           gather_facts: false
@@ -850,14 +854,14 @@ resources:
     type: OS::Heat::MultipartMime
     properties:
       parts:
-        #- config: {get_resource: disable_selinux}
-        #- config: {get_resource: atomic_upgrade}
-        #- config: {get_resource: kube_user}
-        #- config: {get_resource: write_heat_params_master}
-        #- config: {get_resource: install_kubernetes}
-        #- config: {get_resource: install_etcd}
-        #- config: {get_resource: configure_etcd}
-        #- config: {get_resource: configure_kubernetes_master}
+        - config: {get_resource: disable_selinux}
+        - config: {get_resource: atomic_upgrade}
+        - config: {get_resource: write_heat_params_master}
+        - config: {get_resource: kube_user}
+        - config: {get_resource: install_kubernetes}
+        - config: {get_resource: install_etcd}
+        - config: {get_resource: configure_etcd}
+        - config: {get_resource: configure_kubernetes_master}
         #- config: {get_resource: enable_services_master}
         #- config: {get_resource: write_flannel_config}
         #- config: {get_resource: flannel_config_service}
@@ -865,18 +869,18 @@ resources:
         #- config: {get_resource: add_ons}
         #- config: {get_resource: kube_dt}
         #- config: {get_resource: check_up}
-        - config: {get_resource: kube_initial}
-        - config: {get_resource: kube_dependencies}
-        - config: {get_resource: kube_master}
+        #- config: {get_resource: kube_initial}
+        #- config: {get_resource: kube_dependencies}
+        #- config: {get_resource: kube_master}
 
   kube_node_init:
     type: OS::Heat::MultipartMime
     properties:
       parts:
-        #- config: {get_resource: disable_selinux}
-        #- config: {get_resource: atomic_upgrade}
-        #- config: {get_resource: install_kubernetes}
-        #- config: {get_resource: write_heat_params_node}
+        - config: {get_resource: disable_selinux}
+        - config: {get_resource: atomic_upgrade}
+        - config: {get_resource: install_kubernetes}
+        - config: {get_resource: write_heat_params_node}
         #- config: {get_resource: kube_user}
         #- config: {get_resource: kube_examples}
         #- config: {get_resource: configure_docker_storage}
@@ -885,9 +889,9 @@ resources:
         #- config: {get_resource: docker_service}
         #- config: {get_resource: enable_services_node}
         #- config: {get_resource: add_ons}
-        - config: {get_resource: kube_initial}
-        - config: {get_resource: kube_dependencies}
-        - config: {get_resource: kube_worker}
+        #- config: {get_resource: kube_initial}
+        #- config: {get_resource: kube_dependencies}
+        #- config: {get_resource: kube_worker}
 
   ########################################
   ##  Servers
