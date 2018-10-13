@@ -690,17 +690,14 @@ resources:
         - config: {get_resource: atomic_upgrade}
         - config: {get_resource: install_kubernetes}
         - config: {get_resource: write_heat_params_node}
-        #- config: {get_resource: kube_user}
-        #- config: {get_resource: kube_examples}
-        #- config: {get_resource: configure_docker_storage}
-        #- config: {get_resource: kube_register}
-        #- config: {get_resource: configure_kubernetes_node}
-        #- config: {get_resource: docker_service}
-        #- config: {get_resource: enable_services_node}
-        #- config: {get_resource: add_ons}
-        #- config: {get_resource: kube_initial}
-        #- config: {get_resource: kube_dependencies}
-        #- config: {get_resource: kube_worker}
+        - config: {get_resource: kube_user}
+        - config: {get_resource: configure_docker_storage}
+        - config: {get_resource: kube_register}
+        - config: {get_resource: configure_kubernetes_node}
+        - config: {get_resource: docker_service}
+        - config: {get_resource: enable_services_node}
+        - config: {get_resource: add_ons}
+
 
   ########################################
   ##  Servers
@@ -717,8 +714,8 @@ resources:
       scheduler_hints: { group: { get_resource: server_group } }
       metadata: 
         kube_group: k8scluster,vault,nofloating
-      user_data_format: RAW
-      user_data: {get_resource: kube_master_init}
+      #user_data_format: RAW
+      #user_data: {get_resource: kube_master_init}
 
   k8s_node:
     type: OS::Heat::AutoScalingGroup
@@ -739,5 +736,5 @@ resources:
           scheduler_hints: { group: { get_resource: server_group } }
           metadata: 
             kube_group: k8snode,k8scluster,nofloating
-          user_data_format: RAW
-          user_data: {get_resource: kube_node_init}
+          #user_data_format: RAW
+          #user_data: {get_resource: kube_node_init}
