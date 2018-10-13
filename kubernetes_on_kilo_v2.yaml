@@ -58,40 +58,6 @@ parameters:
     - custom_constraint: neutron.network
     description: Must be a valid Neutron Network.
 
-  fixed_network_cidr:
-    type: string
-    description: network range for fixed ip network
-    default: 10.0.0.0/24
-
-  portal_network_cidr:
-    type: string
-    description: address range used by kubernetes for service portals
-    default: 10.254.0.0/16
-
-  flannel_network_cidr:
-    type: string
-    description: network range for flannel overlay network
-    default: 10.100.0.0/16
-
-  flannel_network_subnetlen:
-    type: string
-    description: size of subnet assigned to each node
-    default: 24
-
-  flannel_use_vxlan:
-    type: string
-    description: "if true use the vxlan backend, otherwise use the default udp backend"
-    default: "false"
-    constraints:
-      - allowed_values: ["true", "false"]
-
-  kube_allow_priv:
-    type: string
-    description: whether or not kubernetes should permit privileged containers.
-    default: "true"
-    constraints:
-      - allowed_values: ["true", "false"]
-
   docker_volume_size:
     type: number
     description: size of a cinder volume to allocate to docker for container/image storage
@@ -136,22 +102,8 @@ parameters:
 
 resources:
   ########################################
-  ##  Software Config Parts
+  ##  Policies and Groups
   ########################################
-
-  ### STAGE 1 - Added "swapoff -a"
-  disable_selinux:
-    type: OS::Heat::SoftwareConfig
-    properties:
-      group: ungrouped
-      config: |
-        #cloud-boothook
-        #!/bin/sh
-        setenforce 0
-        sed -i '
-          /^SELINUX=/ s/=.*/=permissive/
-        ' /etc/selinux/config
-
   scale_up_policy:
     type: OS::Heat::ScalingPolicy
     properties:
@@ -173,22 +125,25 @@ resources:
     properties:
       name: nova-server-group
 
-  kube_user:
+  ########################################
+  ##  Software Config Parts
+  ########################################
+
+  ### STAGE 1 - Boot config and Resources with no dependencies
+  disable_selinux:
     type: OS::Heat::SoftwareConfig
     properties:
       group: ungrouped
       config: |
-        #cloud-config
-        system_info:
-          default_user:
-            name: minion
-            lock_passwd: true
-            gecos: Kubernetes Interactive User
-            groups: [wheel, adm, systemd-journal]
-            sudo: ["ALL=(ALL) NOPASSWD:ALL"]
-            shell: /bin/bash
+        #cloud-boothook
+        #!/bin/sh
+        setenforce 0
+        sed -i '
+          /^SELINUX=/ s/=.*/=permissive/
+        ' /etc/selinux/config
+        READYTOENABLE=false
 
-  ### STAGE 2
+  ### STAGE 2 -- Update Image
   atomic_upgrade:
     type: OS::Heat::SoftwareConfig
     depends_on:
@@ -206,8 +161,8 @@ resources:
               touch /etc/upgrade-flag;
               reboot; }      
 
-  ### STAGE 3
-  install_kubernetes:
+  ### STAGE 3 -- Install Packages
+  install_packages_master:
     type: OS::Heat::SoftwareConfig
     depends_on:
       - atomic_upgrade
@@ -215,67 +170,25 @@ resources:
       group: ungrouped
       config: |
         #!/bin/sh
-        echo ">> START install kubernetes and flanneld ..."
-        sudo dnf -y install kubernetes
-        sudo dnf -y install flannel
-        echo ">> ... END install kubernetes and flanneld"
+        sudo su -
+        dnf install kubernetes etcd flannel -y
 
-  ### STAGE 4
-  install_etcd:
+  install_packages_minons:
     type: OS::Heat::SoftwareConfig
     depends_on:
-      - install_kubernetes
+      - atomic_upgrade
     properties:
       group: ungrouped
       config: |
         #!/bin/sh
-        echo ">> START install etcd ..."        
-        sudo dnf -y install etcd
-        echo ">> ... END install etcd"
+        sudo su -
+        dnf install kubernetes-node flannel -y
 
-  ### STAGE 5
-  write_heat_params_master:
+  ### STAGE 4 -- Configure Files (ETCD/APISERVER)
+  configure_etcd_master:
     type: OS::Heat::SoftwareConfig
     depends_on:
-      - install_etcd
-    properties:
-      group: ungrouped
-      config: |
-        #cloud-config
-        merge_how: dict(recurse_array)+list(append)
-        write_files:
-          - path: /etc/sysconfig/heat-params
-            owner: "root:root"
-            permissions: "0644"
-            content: |
-              KUBE_ALLOW_PRIV="FALSE"
-              FLANNEL_NETWORK_CIDR="10.0.0.0/24"
-              FLANNEL_NETWORK_SUBNETLEN="24"
-              FLANNEL_USE_VXLAN="FALSE"
-              PORTAL_NETWORK_CIDR="10.254.0.0/16"
-
-  write_heat_params_node:
-    type: OS::Heat::SoftwareConfig
-    depends_on:
-      - install_etcd
-    properties:
-      group: ungrouped
-      config: |
-        #cloud-config
-        merge_how: dict(recurse_array)+list(append)
-        write_files:
-          - path: /etc/sysconfig/heat-params
-            owner: "root:root"
-            permissions: "0644"
-            content: |
-              KUBE_ALLOW_PRIV="FALSE"
-              #KUBE_MASTER_IP="$KUBE_MASTER_IP"
-              #DOCKER_VOLUME="$DOCKER_VOLUME"
-
-  configure_etcd:
-    type: OS::Heat::SoftwareConfig
-    depends_on:
-      - install_etcd
+      - install_packages_master
     properties:
       group: ungrouped
       config: |
@@ -286,337 +199,64 @@ resources:
         # [member]
         ETCD_NAME=default
         ETCD_DATA_DIR="/var/lib/etcd/default.etcd"
-        ETCD_LISTEN_CLIENT_URLS="http://0.0.0.0:4001"
+        ETCD_LISTEN_CLIENT_URLS="http://0.0.0.0:2379"
         [cluster]
-        ETCD_ADVERTISE_CLIENT_URLS="http://$myip:4001"
-        EOF
-
-  ### STAGE 6
-  kube_register:
-    type: OS::Heat::SoftwareConfig
-    depends_on:
-      - write_heat_params_node
-    properties:
-      group: ungrouped
-      config: |
-        #cloud-config
-        merge_how: dict(recurse_array)+list(append)
-        write_files:
-          - path: /usr/local/bin/kube-register
-            permissions: "0755"
-            owner: root
-            content: |
-              #!/bin/sh
-              . /etc/sysconfig/heat-params
-              master_url=http://${KUBE_MASTER_IP}:8080
-              myip=$(ip addr show eth0 |
-                awk '$1 == "inet" {print $2}' | cut -f1 -d/)
-              # wait for master api
-              until curl -o /dev/null -sf "${master_url}/healthz"; do
-                echo "waiting for kubernetes master"
-                sleep 1
-              done
-              if [ "$1" = "-u" ]; then
-              echo "unregistering minion $myip"
-              kubectl -s ${master_url} delete minion/$myip
-              else
-              echo "registering minion $myip"
-              cpu=$(($(nproc) * 1000))
-              memory=$(awk '/MemTotal: /{print $2 * 1024}' /proc/meminfo)
-              cat <<EOF | kubectl create -s ${master_url} -f-
-              apiVersion: v1beta1
-              id: $myip
-              kind: Minion
-              resources:
-                capacity:
-                  cpu: $cpu
-                  memory: $memory
-              EOF
-              fi
-          - path: /etc/systemd/system/kube-register.service
-            permissions: "0644"
-            owner: root
-            content: |
-              [Unit]
-              Description=Register/unregister this node with the Kubernetes master
-              Requires=kubelet.service
-              After=kubelet.service
-              [Service]
-              Type=oneshot
-              RemainAfterExit=yes
-              ExecStart=/usr/local/bin/kube-register
-              ExecStop=/usr/local/bin/kube-register -u
-              [Install]
-              WantedBy=kubelet.service
-
-
-  configure_docker_storage:
-    type: OS::Heat::SoftwareConfig
-    depends_on:
-      - write_heat_params_node
-    properties:
-      group: ungrouped
-      config: |
-        #!/bin/bash
-        . /etc/sysconfig/heat-params
-        DOCKER_DEV=/dev/disk/by-id/virtio-${DOCKER_VOLUME:0:20}
-        attempts=60
-        while [[ ! -b $DOCKER_DEV && $attempts != 0 ]]; do
-          echo "waiting for disk $DOCKER_DEV"
-          sleep 0.5
-          udevadm trigger
-          let attempts--
-        done
-        if ! [ -b $DOCKER_DEV ]; then
-          echo "ERROR: device $DOCKER_DEV does not exist" >&2
-          exit 1
-        fi
-        pvcreate $DOCKER_DEV
-        vgcreate docker $DOCKER_DEV
-        cat > /etc/sysconfig/docker-storage-setup <<EOF
-        VG=docker
+        ETCD_ADVERTISE_CLIENT_URLS="http://$myip:2379"
         EOF
 
   configure_kubernetes_master:
     type: OS::Heat::SoftwareConfig
     depends_on:
-      - write_heat_params_master
+      - install_packages_master
     properties:
       group: ungrouped
       config: |
         #!/bin/sh
         . /etc/sysconfig/heat-params
-        echo "configuring kubernetes (master)"
-        sed -i '
-          /^KUBE_ALLOW_PRIV=/ s/=.*/="--allow_privileged='"$KUBE_ALLOW_PRIV"'"/
-        ' /etc/kubernetes/config
         sed -i '
           /^KUBE_API_ADDRESS=/ s/=.*/="--address=0.0.0.0"/
-          /^KUBE_SERVICE_ADDRESSES=/ s|=.*|="--portal_net='"$PORTAL_NETWORK_CIDR"'"|
         ' /etc/kubernetes/apiserver
-        sed -i '
-          /^KUBELET_ADDRESSES=/ s/=.*/="--machines='""'"/
-        ' /etc/kubernetes/controller-manager
+        sed -i '/ServiceAccount,//' /etc/kubernetes/apiserver
 
-  configure_kubernetes_node:
+  ### THIS PIECE WAS HARDCODED. Network Variable was hardcoded!!!! #TODO
+
+  configure_flannel_master:
     type: OS::Heat::SoftwareConfig
     depends_on:
-      - write_heat_params_node
+      - install_packages_master
     properties:
       group: ungrouped
       config: |
         #!/bin/sh
-        . /etc/sysconfig/heat-params
-        echo ">> Configuring Kubernetes (minion)"
-        myip=$(ip addr show eth0 |
-        awk '$1 == "inet" {print $2}' | cut -f1 -d/)
-        myip_last_octet=${myip##*.}
-        sed -i '
-        /^KUBE_ALLOW_PRIV=/ s/=.*/="--allow_privileged='"$KUBE_ALLOW_PRIV"'"/
-        /^KUBE_ETCD_SERVERS=/ s|=.*|="--etcd_servers=http://'"$KUBE_MASTER_IP"':4001"|
-        /^KUBE_MASTER=/ s/=.*/="--master='"$KUBE_MASTER_IP"':8080"/
-        ' /etc/kubernetes/config
-        sed -i '
-        /^KUBELET_ADDRESS=/ s/=.*/="--address=0.0.0.0"/
-        /^KUBELET_HOSTNAME=/ s/=.*/="--hostname_override='"$myip"'"/
-        /^KUBELET_API_SERVER=/ s/=.*/="--api_servers='"$KUBE_MASTER_IP"':8080"/
-        ' /etc/kubernetes/kubelet
-        sed -i '
-        /^FLANNEL_ETCD=/ s|=.*|="http://'"$KUBE_MASTER_IP"':4001"|
-        ' /etc/sysconfig/flanneld
-        cat >> /etc/environment <<EOF
-          KUBERNETES_MASTER=http://$KUBE_MASTER_IP:8080
-        EOF
-        systemctl enable kube-register
-        echo ">> ... END Configuring Kubernetes (minion)"
-
-  write_flannel_config:
-    type: OS::Heat::SoftwareConfig
-    depends_on:
-      - write_heat_params_master
-      - configure_etcd
-    properties:
-      group: ungrouped
-      config: |
-        #!/bin/sh
-        . /etc/sysconfig/heat-params
-        . /etc/sysconfig/flanneld
-        FLANNEL_JSON=/etc/sysconfig/flannel-network.json
-        if [ "$FLANNEL_USE_VXLAN" == "true" ]; then
-          use_vxlan=1
-        fi
-        # Generate a flannel configuration that we will
-        # store into etcd using curl.
+        FLANNEL_JSON=/etc/sysconfig/flanneld-conf.json
         cat > $FLANNEL_JSON <<EOF
         {
-          "Network": "$FLANNEL_NETWORK_CIDR",
-          "Subnetlen": $FLANNEL_NETWORK_SUBNETLEN
-        EOF
-        if [ "$use_vxlan" = 1 ]; then
-        cat >> $FLANNEL_JSON <<EOF
-          ,
+          "Network": "192.168.17.0/12",
+          "Subnetlen": 24
           "Backend": {
             "Type": "vxlan"
           }
-        EOF
-        fi
-        cat >> $FLANNEL_JSON <<EOF
         }
         EOF
+        curl -L http://localhost:2379/v2/keys/atomic.io/network/config -XPUT --data-urlencode value@/etc/sysconfig/flanneld-conf.json
+        etcdctl get /atomic.io/network/config
+        READYTOENABLE=true
 
-  ### STAGE 7
-  flannel_config_service:
-    type: OS::Heat::SoftwareConfig
-    depends_on:
-      - configure_kubernetes_master
-      - write_flannel_config
-    properties:
-      group: ungrouped
-      config: |
-        #cloud-config
-        merge_how: dict(recurse_array)+list(append)
-        write_files:
-          - path: /usr/local/bin/flannel-config
-            owner: "root:root"
-            permissions: "0755"
-            content: |
-              #!/bin/sh
-              : ${FLANNEL_JSON:=/etc/sysconfig/flannel-network.json}
-              if ! [ -f "$FLANNEL_JSON" ]; then
-                echo "ERROR: missing network configuration file" >&2
-                exit 1
-              fi
-              if ! [ "$FLANNEL_ETCD" ] && [ "$FLANNEL_ETCD_KEY" ]; then
-                echo "ERROR: missing required configuration" >&2
-                exit 1
-              fi
-              echo "creating flanneld config in etcd"
-              while ! curl -sf -L $FLANNEL_ETCD/v2/keys${FLANNEL_ETCD_KEY}/config \
-                -X PUT --data-urlencode value@${FLANNEL_JSON}; do
-                  echo "waiting for etcd"
-                  sleep 1
-              done
-          - path: /etc/systemd/system/flannel-config.service
-            owner: "root:root"
-            permissions: "0644"
-            content: |
-              [Unit]
-              After=etcd.service
-              Requires=etcd.service
-              [Service]
-              Type=oneshot
-              EnvironmentFile=/etc/sysconfig/flanneld
-              ExecStart=/usr/local/bin/flannel-config
-              [Install]
-              WantedBy=multi-user.target
-        runcmd:
-          - systemctl enable flannel-config
-          - systemctl start --no-block flannel-config
-
-  docker_service:
-    type: OS::Heat::SoftwareConfig
-    depends_on:
-      - configure_kubernetes_master
-      - write_flannel_config
-    properties:
-      group: ungrouped
-      config: |
-        #cloud-config
-        merge_how: dict(recurse_array)+list(append)
-        bootcmd:
-          - mkdir -p /etc/systemd/system/docker.service.d
-          - mkdir -p /etc/systemd/system/flanneld.service.d
-        write_files:
-          - path: /usr/local/bin/flannel-docker-bridge
-            owner: "root:root"
-            permissions: "0755"
-            content: |
-              #!/bin/sh
-              if ! [ "$FLANNEL_SUBNET" ] && [ "$FLANNEL_MTU" ] ; then
-                echo ">> ERROR: missing required environment variables." >&2
-                exit 1
-              fi
-              mkdir -p /run/flannel/
-              cat > /run/flannel/docker <<EOF
-              DOCKER_NETWORK_OPTIONS="--bip=$FLANNEL_SUBNET --mtu=$FLANNEL_MTU"
-              EOF
-          - path: /etc/systemd/system/flannel-docker-bridge.service
-            owner: "root:root"
-            permissions: "0644"
-            content: |
-              [Unit]
-              After=flanneld.service
-              Before=docker.service
-              Requires=flanneld.service
-              [Service]
-              Type=oneshot
-              EnvironmentFile=/run/flannel/subnet.env
-              ExecStart=/usr/local/bin/flannel-docker-bridge
-              [Install]
-              WantedBy=docker.service
-          - path: /etc/systemd/system/docker.service.d/flannel.conf
-            owner: "root:root"
-            permissions: "0644"
-            content: |
-              [Unit]
-              Requires=flannel-docker-bridge.service
-              After=flannel-docker-bridge.service
-              [Service]
-              EnvironmentFile=/run/flannel/docker
-          - path: /etc/systemd/system/flanneld.service.d/flannel-docker-bridge.conf
-            owner: "root:root"
-            permissions: "0644"
-            content: |
-              [Unit]
-              Requires=flannel-docker-bridge.service
-              Before=flannel-docker-bridge.service
-              [Install]
-              Also=flannel-docker-bridge.service
-
-  ### STAGE 8
+  ## STAGE 5 -- Start Services
   enable_services_master:
     type: OS::Heat::SoftwareConfig
     depends_on:
-      - flannel_config_service
+      - configure_flannel_master
     properties:
       group: ungrouped
       config: |
         #!/bin/sh
-        # make sure we pick up any modified unit files
+        echo "READYTOENABLE=" READYTOENABLE
         systemctl daemon-reload
-        echo starting services
-        for service in etcd kube-apiserver kube-scheduler kube-controller-manager flanneld kube-proxy; do
-          echo "activating service $service"
-          systemctl enable $service
-          systemctl --no-block start $service
-        done
+        systemctl enable --now etcd kube-apiserver kube-controller-manager kube-scheduler kubelet docker kube-proxy flanneld
+        systemctl status etcd kube-apiserver kube-controller-manager kube-scheduler kubelet docker kube-proxy flanneld
 
-
-  enable_services_node:
-    type: OS::Heat::SoftwareConfig
-    depends_on:
-      - docker_service
-    properties:
-      group: ungrouped
-      config: |
-        #!/bin/sh
-        echo ">> Starting services"
-        # docker is already enabled and possibly running on centos atomic host
-        # so we need to stop it first and delete the docker0 bridge (which will
-        # be re-created using the flannel-provided subnet).
-        echo ">> Stopping docker"
-        systemctl stop docker
-        ip link del docker0
-        # make sure we pick up any modified unit files
-        systemctl daemon-reload
-        for service in flanneld docker kubelet kube-proxy; do
-          echo ">> Activating service $service"
-          systemctl enable $service
-          systemctl --no-block start $service
-        done
-        echo ">> ... Completed starting services"
-
-  ### STAGE 9
+  ### STAGE 6 -- Addons and Checkups
   add_ons:
     type: OS::Heat::SoftwareConfig
     depends_on:
@@ -651,9 +291,9 @@ resources:
         echo "------------------------------------------------------"
         cat /etc/kubernetes/apiserver
         echo "------------------------------------------------------"
-        cat /usr/local/bin/flannel-config
+        cat /etc/sysconfig/flanneld-conf.json
         echo "------------------------------------------------------"
-        cat /etc/kubernetes/controller-manager
+        etcdctl get /atomic.io/network/config
         echo "------------------------------------------------------"
         whoami
         echo "------------------------------------------------------"
@@ -669,15 +309,11 @@ resources:
       parts:
         - config: {get_resource: disable_selinux}
         - config: {get_resource: atomic_upgrade}
-        - config: {get_resource: write_heat_params_master}
-        - config: {get_resource: kube_user}
-        - config: {get_resource: install_kubernetes}
-        - config: {get_resource: install_etcd}
-        - config: {get_resource: configure_etcd}
+        - config: {get_resource: install_packages_master
+        - config: {get_resource: configure_etcd_master}
         - config: {get_resource: configure_kubernetes_master}
+        - config: {get_resource: configure_flannel_master}
         - config: {get_resource: enable_services_master}
-        - config: {get_resource: write_flannel_config}
-        - config: {get_resource: flannel_config_service}
         - config: {get_resource: add_ons}
         - config: {get_resource: check_up}
 
@@ -688,16 +324,6 @@ resources:
       parts:
         - config: {get_resource: disable_selinux}
         - config: {get_resource: atomic_upgrade}
-        - config: {get_resource: install_kubernetes}
-        - config: {get_resource: write_heat_params_node}
-        - config: {get_resource: kube_user}
-        - config: {get_resource: configure_docker_storage}
-        - config: {get_resource: kube_register}
-        - config: {get_resource: configure_kubernetes_node}
-        - config: {get_resource: docker_service}
-        - config: {get_resource: enable_services_node}
-        - config: {get_resource: add_ons}
-
 
   ########################################
   ##  Servers
@@ -714,8 +340,8 @@ resources:
       scheduler_hints: { group: { get_resource: server_group } }
       metadata: 
         kube_group: k8scluster,vault,nofloating
-      #user_data_format: RAW
-      #user_data: {get_resource: kube_master_init}
+      user_data_format: RAW
+      user_data: {get_resource: kube_master_init}
 
   k8s_node:
     type: OS::Heat::AutoScalingGroup
