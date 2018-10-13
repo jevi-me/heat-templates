@@ -232,10 +232,11 @@ resources:
       group: ungrouped
       config: |
         #!/bin/sh
+        ipadr=$(ip addr show eth0 | awk '$1 == "inet" {print $4}' | cut -f2 -d/ | sed 's/\([0-9]*\.[0-9]*\.[0-9]*\.\)[0-9]*/\10/')
         FLANNEL_JSON=/etc/sysconfig/flanneld-conf.json
         cat > $FLANNEL_JSON <<EOF
         {
-          "Network": "192.168.17.0/12",
+          "Network": "$ipadr/12",
           "Subnetlen": 24
           "Backend": {
             "Type": "vxlan"
