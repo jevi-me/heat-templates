@@ -161,6 +161,15 @@ resources:
               sudo: ["ALL=(ALL) NOPASSWD:ALL"]
               shell: /bin/bash
 
+  remote_ssh_access:
+     type: OS::Neutron::SecurityGroup
+     properties:
+       name: remote_ssh_access
+       rules:
+         - remote_ip_prefix: 0.0.0.0/0
+           protocol: tcp
+           port_range_min: 22
+           port_range_max: 22
 
   ########################################
   ##  Software Config Parts
@@ -422,6 +431,9 @@ resources:
       networks: 
       - network: { get_param: network_resource }
       scheduler_hints: { group: { get_resource: server_group } }
+      security_groups: 
+      - default
+      - get_resource: remote_ssh_access
       metadata: 
         kube_group: k8scluster,vault,nofloating
       user_data_format: RAW
