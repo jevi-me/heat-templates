@@ -132,16 +132,34 @@ resources:
     properties:
       name: nova-server-group
 
-   kube_master_floating:
-     type: OS::Neutron::FloatingIP
-     properties:
-       floating_network: {get_param: ext_network}
+  kube_master_floating:
+    type: OS::Nova::FloatingIP
+    properties:
+      pool: {get_param: ext_network}
 
-  # kube_master_floating_association:
-  #  type: OS::Neutron::FloatingIPAssociation
-  #  properties:
-  #    floatingip_id:
-  #      get_resource: kube_master_floating
+  kube_master_floating_association:
+    type: OS::Nova::FloatingIPAssociation
+    depends_on:
+      - k8s_master
+    properties:
+      floating_ip: {get_resource: kube_master_floating}
+      server_id: {get_resource: k8s_master}
+
+  kube_user:
+    type: OS::Heat::SoftwareConfig
+    properties:
+      group: ungrouped
+      config: |
+        #cloud-config
+        system_info:
+          default_user:
+            name: minion
+            lock_passwd: true
+            gecos: Kubernetes Interactive User
+            groups: [wheel, adm, systemd-journal]
+            sudo: ["ALL=(ALL) NOPASSWD:ALL"]
+            shell: /bin/bash
+
 
   ########################################
   ##  Software Config Parts
@@ -317,7 +335,7 @@ resources:
 
   #add_ons_nodes
 
-  check_up_master:
+  check_up:
     type: OS::Heat::SoftwareConfig
     depends_on:
       - add_ons_master
@@ -362,7 +380,7 @@ resources:
         - config: {get_resource: enable_services_master}
         - config: {get_resource: start_flannel_master}
         - config: {get_resource: add_ons_master}
-        - config: {get_resource: check_up_master}
+        - config: {get_resource: check_up}
 
   kube_node_init:
     type: OS::Heat::MultipartMime
@@ -374,6 +392,7 @@ resources:
         - config: {get_resource: configure_minion}
         - config: {get_resource: enable_services_minion}
         - config: {get_resource: start_flannel_minion}
+        - config: {get_resource: check_up}
 
   ########################################
   ##  Servers
@@ -415,11 +434,10 @@ resources:
           user_data_format: RAW
           user_data: {get_resource: kube_node_init}
 
-
 outputs:
 
   kube_master:
-    value: {get_attr: [kube_master_floating, floating_ip_address]}
+    value: {get_attr: [kube_master_floating, ip]}
     description: >
       This is the "public" ip address of the Kubernetes master server.
       Use this address to log in to the Kubernetes master via ssh or
