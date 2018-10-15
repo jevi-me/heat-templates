@@ -199,12 +199,14 @@ resources:
     type: OS::Heat::SoftwareConfig
     depends_on:
       - atomic_upgrade
+      - kube_user
     properties:
       group: ungrouped
       config: |
         #!/bin/sh
         sudo su -
-        dnf install kubernetes etcd flannel -y
+        dnf install python kubernetes etcd -y
+        #dnf install flannel -y
         #dnf install cockpit -y
 
   install_packages_minion:
@@ -216,7 +218,8 @@ resources:
       config: |
         #!/bin/sh
         sudo su -
-        dnf install kubernetes-node flannel -y
+        dnf install python kubernetes-node -y
+        #dnf install flannel -y
 
 
   ### STAGE 4 -- Configure Files
@@ -240,7 +243,7 @@ resources:
         sed -i '/^KUBE_API_ADDRESS=/ s/=.*/="--address=0.0.0.0"/' /etc/kubernetes/apiserver
         sed -i '/^KUBELET_ADDRESS=/ s/=.*/="--address=0.0.0.0"/' /etc/kubernetes/kubelet
         sed -i 's/ServiceAccount,//' /etc/kubernetes/apiserver
-        sed -i '/^KUBELET_HOSTNAME=/ s/=.*/=""/' /etc/kubernetes/kubelet
+        sed -i '/^KUBELET_HOSTNAME=/ s/=.*/="k8s_master"/' /etc/kubernetes/kubelet
 
   configure_minion:
     type: OS::Heat::SoftwareConfig
@@ -255,7 +258,7 @@ resources:
         sed -i '/^KUBE_API_SERVER=/ s/=.*/=""--api-servers=http://$masterip:8080/' /etc/kubernetes/kubelet
         sed -i '/^KUBELET_ADDRESS=/ s/=.*/="--address=0.0.0.0"/' /etc/kubernetes/kubelet
         sed -i '/^KUBELET_HOSTNAME=/ s/=.*/=""/' /etc/kubernetes/kubelet
-        sed -i '/^FLANNEL_ETCD=/ s/=.*/="http://$masterip:2379"/' /etc/sysconfig/flanneld
+        #sed -i '/^FLANNEL_ETCD=/ s/=.*/="http://$masterip:2379"/' /etc/sysconfig/flanneld
 
   ## STAGE 5 -- Start Services
   enable_services_master:
@@ -284,45 +287,45 @@ resources:
         systemctl status kubelet docker kube-proxy 
 
   ## STAGE 6 -- Start up Flannel
-  start_flannel_master:
-    type: OS::Heat::SoftwareConfig
-    depends_on:
-      - enable_services_master
-    properties:
-      group: ungrouped
-      config: |
-        #!/bin/sh
-        bmk=$(ip addr show eth0 | awk '$1 == "inet" {print $4}' | cut -f2 -d/ | sed 's/\([0-9]*\.[0-9]*\.[0-9]*\.\)[0-9]*/\10/')
-        FLANNEL_JSON=/etc/sysconfig/flanneld-conf.json
-        cat > $FLANNEL_JSON <<EOF
-        {
-          "Network": "$bmk/12",
-          "Subnetlen": 24
-          "Backend": {
-            "Type": "vxlan"
-          }
-        }
-        EOF
-        curl -L --ipv4 http://localhost:2379/v2/keys/atomic.io/network/config -XPUT --data-urlencode value@/etc/sysconfig/flanneld-conf.json
-        etcdctl get /atomic.io/network/config
-        systemctl enable flanneld
+  # start_flannel_master:
+  #   type: OS::Heat::SoftwareConfig
+  #   depends_on:
+  #     - enable_services_master
+  #   properties:
+  #     group: ungrouped
+  #     config: |
+  #       #!/bin/sh
+  #       bmk=$(ip addr show eth0 | awk '$1 == "inet" {print $4}' | cut -f2 -d/ | sed 's/\([0-9]*\.[0-9]*\.[0-9]*\.\)[0-9]*/\10/')
+  #       FLANNEL_JSON=/etc/sysconfig/flanneld-conf.json
+  #       cat > $FLANNEL_JSON <<EOF
+  #       {
+  #         "Network": "$bmk/12",
+  #         "Subnetlen": 24
+  #         "Backend": {
+  #           "Type": "vxlan"
+  #         }
+  #       }
+  #       EOF
+  #       curl -L --ipv4 http://localhost:2379/v2/keys/atomic.io/network/config -XPUT --data-urlencode value@/etc/sysconfig/flanneld-conf.json
+  #       etcdctl get /atomic.io/network/config
+  #       systemctl enable flanneld
 
-  start_flannel_minion:
-    type: OS::Heat::SoftwareConfig
-    depends_on:
-      - enable_services_minion
-    properties:
-      group: ungrouped
-      config: |
-        #!/bin/sh
-        systemctl enable flanneld
+  # start_flannel_minion:
+  #   type: OS::Heat::SoftwareConfig
+  #   depends_on:
+  #     - enable_services_minion
+  #   properties:
+  #     group: ungrouped
+  #     config: |
+  #       #!/bin/sh
+  #       systemctl enable flanneld
 
 
   ### STAGE 7 -- Addons and Checkups
   add_ons_master:
     type: OS::Heat::SoftwareConfig
-    depends_on:
-      - start_flannel_master
+    #depends_on:
+    # - start_flannel_master
     properties:
       group: ungrouped
       config: |
@@ -377,8 +380,9 @@ resources:
         - config: {get_resource: atomic_upgrade}
         - config: {get_resource: install_packages_master}
         - config: {get_resource: configure_master}
+        - config: {get_resource: kube_user}
         - config: {get_resource: enable_services_master}
-        - config: {get_resource: start_flannel_master}
+        #- config: {get_resource: start_flannel_master}
         - config: {get_resource: add_ons_master}
         - config: {get_resource: check_up}
 
@@ -391,7 +395,7 @@ resources:
         - config: {get_resource: install_packages_minion}
         - config: {get_resource: configure_minion}
         - config: {get_resource: enable_services_minion}
-        - config: {get_resource: start_flannel_minion}
+        #- config: {get_resource: start_flannel_minion}
         - config: {get_resource: check_up}
 
   ########################################
