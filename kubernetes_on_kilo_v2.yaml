@@ -153,6 +153,7 @@ resources:
         #cloud-config
         system_info:
           users:
+            - default
             - name: minion
               gecos: Kubernetes Interactive User
               groups: [wheel, adm, systemd-journal]
@@ -366,6 +367,16 @@ resources:
         echo "------------------------------------------------------"
         hostname
         echo "------------------------------------------------------"
+        ls /etc/systemd/system/*.wants/
+        echo "------------------------------------------------------"
+        systemctl list-dependencies
+        echo "------------------------------------------------------"
+        systemctl list-jobs
+        echo "------------------------------------------------------"
+        systemctl --state=failed
+        echo "------------------------------------------------------"
+
+
 
   #check_up_nodes:
 
