@@ -223,6 +223,8 @@ resources:
     type: OS::Heat::SoftwareConfig
     depends_on:
       - atomic_upgrade
+      - kube_user
+      - add_ons_master
     properties:
       group: ungrouped
       config: |
@@ -263,12 +265,13 @@ resources:
       group: ungrouped
       config: |
         #!/bin/sh
-        masterip=""
+        echo "MASTER IP IN NODE SET TO" %masterip% $masterip masterip
         sed -i '/^KUBE_MASTER=/ s/=.*/="--master=http://$masterip:8080"/' /etc/kubernetes/config
-        sed -i '/^KUBE_API_SERVER=/ s/=.*/=""--api-servers=http://$masterip:8080/' /etc/kubernetes/kubelet
+        sed -i '/^KUBE_API_SERVER=/ s/=.*/="--api-servers=http://%masterip%:8080"/' /etc/kubernetes/kubelet
         sed -i '/^KUBELET_ADDRESS=/ s/=.*/="--address=0.0.0.0"/' /etc/kubernetes/kubelet
         sed -i '/^KUBELET_HOSTNAME=/ s/=.*/=""/' /etc/kubernetes/kubelet
         #sed -i '/^FLANNEL_ETCD=/ s/=.*/="http://$masterip:2379"/' /etc/sysconfig/flanneld
+      inputs: [{name: masterip,description: "Master Node IP Addess",default: {get_attr: [kube_master_floating, ip]}}]
 
   ## STAGE 5 -- Start Services
   enable_services_master:
@@ -334,8 +337,9 @@ resources:
   ### STAGE 7 -- Addons and Checkups
   add_ons_master:
     type: OS::Heat::SoftwareConfig
-    #depends_on:
+    depends_on:
     # - start_flannel_master
+      - enable_services_minion
     properties:
       group: ungrouped
       config: |
@@ -346,7 +350,7 @@ resources:
         kubectl get all --all-namespaces=true
         echo ">> ... END Applying Addons"
 
-  #add_ons_nodes
+  #add_ons_minions
 
   check_up:
     type: OS::Heat::SoftwareConfig
@@ -371,6 +375,8 @@ resources:
         cat /etc/sysconfig/flanneld-conf.json
         echo "------------------------------------------------------"
         etcdctl get /atomic.io/network/config
+        echo "------------------------------------------------------"
+        cat /etc/kubernetes/kubelet
         echo "------------------------------------------------------"
         whoami
         echo "------------------------------------------------------"
@@ -414,6 +420,7 @@ resources:
         - config: {get_resource: atomic_upgrade}
         - config: {get_resource: install_packages_minion}
         - config: {get_resource: configure_minion}
+        - config: {get_resource: kube_user}
         - config: {get_resource: enable_services_minion}
         #- config: {get_resource: start_flannel_minion}
         - config: {get_resource: check_up}
@@ -459,13 +466,72 @@ resources:
           metadata: 
             kube_group: k8snode,k8scluster,nofloating
           user_data_format: RAW
-          user_data: {get_resource: kube_node_init}
+          user_data:
+            str_replace:
+              template: |
+                #!/bin/sh
+                setenforce 0
+                sed -i '/^SELINUX=/ s/=.*/=permissive/' /etc/selinux/config
+                test -f /etc/upgrade-flag ||
+                { rm -rf /var/lib/cloud/instances/*;
+                  rpm-ostree upgrade > /var/log/ostree-upgrade.log 2>&1;
+                  touch /etc/upgrade-flag;
+                  reboot; }
+                sudo su -
+                dnf install python kubernetes-node -y
+                #dnf install flannel -y
+                echo "MASTER IP IN NODE SET TO" %masterip%
+                sed -i '/^KUBE_MASTER=/ s/=.*/="--master=http://%masterip%:8080"/' /etc/kubernetes/config
+                sed -i '/^KUBE_API_SERVER=/ s/=.*/="--api-servers=http://%masterip%:8080"/' /etc/kubernetes/kubelet
+                sed -i '/^KUBELET_ADDRESS=/ s/=.*/="--address=0.0.0.0"/' /etc/kubernetes/kubelet
+                sed -i '/^KUBELET_HOSTNAME=/ s/=.*/=""/' /etc/kubernetes/kubelet
+                #sed -i '/^FLANNEL_ETCD=/ s/=.*/="http://%masterip%:2379"/' /etc/sysconfig/flanneld
+                systemctl daemon-reload
+                systemctl enable --now kubelet docker kube-proxy 
+                systemctl status kubelet docker kube-proxy
+                echo ">> Check Up"
+                echo "------------------------------------------------------"
+                cat /etc/sysconfig/heat-params
+                echo "------------------------------------------------------"
+                cat /etc/etcd/etcd.conf
+                echo "------------------------------------------------------"
+                cat /etc/sysconfig/flanneld
+                echo "------------------------------------------------------"
+                cat /etc/kubernetes/config
+                echo "------------------------------------------------------"
+                cat /etc/kubernetes/apiserver
+                echo "------------------------------------------------------"
+                cat /etc/sysconfig/flanneld-conf.json
+                echo "------------------------------------------------------"
+                etcdctl get /atomic.io/network/config
+                echo "------------------------------------------------------"
+                cat /etc/kubernetes/kubelet
+                echo "------------------------------------------------------"
+                whoami
+                echo "------------------------------------------------------"
+                hostname
+                echo "------------------------------------------------------"
+                ls /etc/systemd/system/*.wants/
+                echo "------------------------------------------------------"
+                systemctl list-dependencies
+                echo "------------------------------------------------------"
+                systemctl list-jobs
+                echo "------------------------------------------------------"
+                systemctl --state=failed
+                echo "------------------------------------------------------"
+              params:
+                "%masterip%": {get_attr: [kube_master_floating, ip]}
+
 
 outputs:
 
   kube_master:
     value: {get_attr: [kube_master_floating, ip]}
     description: >
-      This is the "public" ip address of the Kubernetes master server.
+      This is the public ip address of the Kubernetes master server.
       Use this address to log in to the Kubernetes master via ssh or
       to access the Kubernetes API from outside the cluster.
+  dashboard_links:
+    value: "Pending"
+    description: > 
+      Links for the various dashboards are as follows:
