@@ -172,6 +172,8 @@ resources:
 
   kube_user:
     type: OS::Heat::SoftwareConfig
+    depends_on:
+      - disable_selinux
     properties:
       group: ungrouped
       config: |
@@ -216,7 +218,6 @@ resources:
         #!/bin/sh
         sudo su -
         dnf install python kubernetes flannel etcd -y
-        #dnf install cockpit -y
 
   ### STAGE 4 -- Configure Files
   configure_master:
@@ -277,9 +278,10 @@ resources:
         EOF
         curl -L --ipv4 http://localhost:2379/v2/keys/atomic.io/network/config -XPUT --data-urlencode value@/etc/sysconfig/flanneld-conf.json
         etcdctl get /atomic.io/network/config
+        systemctl daemon-reload
         systemctl enable flanneld
 
-  ### STAGE 7 -- Addons and Run Checks
+  ### STAGE 7 -- Addons and Run Checks And Verify
   add_ons_master:
     type: OS::Heat::SoftwareConfig
     depends_on:
@@ -334,7 +336,7 @@ resources:
         echo "------------------------------------------------------"
         kubectl get nodes --all-namespaces=true
 
-  ### STAGE 7 - Build
+  ### STAGE 8 - Build
   kube_master_init:
     type: OS::Heat::MultipartMime
     properties:
@@ -406,18 +408,20 @@ resources:
                 packages:
                   - python
                   - kubernetes-node
+                  - flannel
                 bootcmd:
                   - setenforce 0 
                   - sed -i 's/^SELINUX=.*/^SELINUX=permissive/' /etc/selinux/config
                 runcmd:
                   - sudo su -
-                  - sed -i s'/^KUBE_MASTER=.*/KUBE_MASTER=\"--master=http:\/\/%masterip%:8080\"/'      /etc/kubernetes/config 
-                  - sed -i s'/^KUBE_API_SERVER=.*/KUBE_API_SERVER=\"--api-servers=http:\/\/%masterip%:8080\"/' /etc/kubernetes/kubelet 
-                  - sed -i s'/^KUBELET_ADDRESS=.*/KUBELET_ADDRESS=\"--address=0.0.0.0\"/'                    /etc/kubernetes/kubelet 
-                  - sed -i s'/^KUBELET_HOSTNAME=.*/KUBELET_HOSTNAME=\"k8s_node\"/'                                     /etc/kubernetes/kubelet 
-                  - sed -i s'/^FLANNEL_ETCD=.*/^FLANNEL_ETCD="http://%masterip%:2379"/' /etc/sysconfig/flanneld
+                  - sed -i 's/^KUBE_MASTER=.*/KUBE_MASTER=\"--master=http:\/\/%masterip%:8080\"/'      /etc/kubernetes/config 
+                  - sed -i 's/^KUBE_API_SERVER=.*/KUBE_API_SERVER=\"--api-servers=http:\/\/%masterip%:8080\"/' /etc/kubernetes/kubelet 
+                  - sed -i 's/^KUBELET_ADDRESS=.*/KUBELET_ADDRESS=\"--address=0.0.0.0\"/'                    /etc/kubernetes/kubelet 
+                  - sed -i 's/^KUBELET_HOSTNAME=.*/KUBELET_HOSTNAME=\"k8s_node\"/'                                     /etc/kubernetes/kubelet 
+                  - sed -i 's/^FLANNEL_ETCD=.*/^FLANNEL_ETCD="http://%masterip%:2379"/' /etc/sysconfig/flanneld
                   - sed -i 's/ServiceAccount,//' /etc/kubernetes/apiserver
-                  - systemctl daemon-reload && systemctl enable --now kubelet docker kube-proxy && systemctl status kubelet docker kube-proxy && systemctl enable flanneld
+                  - systemctl daemon-reload && systemctl enable --now kubelet docker kube-proxy flanneld && systemctl status kubelet docker kube-proxy flanneld
+                  - kubectl get all --all-namespaces=true
                 final_message: "The system is up, after $UPTIME seconds. Master Node is @ %masterip%"
               params:
                 "%masterip%": {get_attr: [kube_master_floating, ip]}
