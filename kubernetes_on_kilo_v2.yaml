@@ -145,22 +145,6 @@ resources:
       floating_ip: {get_resource: kube_master_floating}
       server_id: {get_resource: k8s_master}
 
-  kube_user:
-    type: OS::Heat::SoftwareConfig
-    properties:
-      group: ungrouped
-      config: |
-        #cloud-config
-        system_info:
-          users:
-            - default
-            - name: minion
-              gecos: Kubernetes Interactive User
-              groups: [wheel, adm, systemd-journal]
-              lock_passwd: true
-              sudo: ["ALL=(ALL) NOPASSWD:ALL"]
-              shell: /bin/bash
-
   remote_ssh_access:
      type: OS::Neutron::SecurityGroup
      properties:
@@ -185,6 +169,22 @@ resources:
         #!/bin/sh
         setenforce 0
         sed -i '/^SELINUX=/ s/=.*/=permissive/' /etc/selinux/config
+
+  kube_user:
+    type: OS::Heat::SoftwareConfig
+    properties:
+      group: ungrouped
+      config: |
+        #cloud-config
+        system_info:
+          users:
+            - default
+            - name: minion
+              gecos: Kubernetes Interactive User
+              groups: [wheel, adm, systemd-journal]
+              lock_passwd: true
+              sudo: ["ALL=(ALL) NOPASSWD:ALL"]
+              shell: /bin/bash
 
   ### STAGE 2 -- Update Image
   atomic_upgrade:
@@ -260,8 +260,7 @@ resources:
   add_ons_master:
     type: OS::Heat::SoftwareConfig
     depends_on:
-    # - start_flannel_master
-      - enable_services_minion
+      - enable_services_master
     properties:
       group: ungrouped
       config: |
@@ -310,6 +309,7 @@ resources:
         echo "------------------------------------------------------"
         systemctl --state=failed
         echo "------------------------------------------------------"
+        kubectl get nodes --all-namespaces=true
 
   ########################################
   ##  Software Config Init
@@ -320,11 +320,10 @@ resources:
       parts:
         - config: {get_resource: disable_selinux}
         - config: {get_resource: atomic_upgrade}
+        - config: {get_resource: kube_user}
         - config: {get_resource: install_packages_master}
         - config: {get_resource: configure_master}
-        - config: {get_resource: kube_user}
         - config: {get_resource: enable_services_master}
-        - config: {get_resource: add_ons_master}
         - config: {get_resource: check_up_master}
 
   ########################################
@@ -371,45 +370,32 @@ resources:
           user_data:
             str_replace:
               template: |
-                #!/bin/sh
-                setenforce 0
-                sed -i '/^SELINUX=/ s/=.*/=permissive/' /etc/selinux/config
-                test -f /etc/upgrade-flag ||
-                { rm -rf /var/lib/cloud/instances/*;
-                  rpm-ostree upgrade > /var/log/ostree-upgrade.log 2>&1;
-                  touch /etc/upgrade-flag;
-                  reboot; }
-                sudo su -
-                dnf install python kubernetes-node -y
-                #dnf install flannel -y
-                echo "MASTER IP IN NODE SET TO:" %masterip%
-                sed -i '/^KUBE_MASTER=/      s/=.*/="--master=http://%masterip%:8080"/'      /etc/kubernetes/config
-                sed -i '/^KUBE_API_SERVER=/  s/=.*/="--api-servers=http://%masterip%:8080"/' /etc/kubernetes/kubelet
-                sed -i '/^KUBELET_ADDRESS=/  s/=.*/="--address=0.0.0.0"/'                    /etc/kubernetes/kubelet
-                sed -i '/^KUBELET_HOSTNAME=/ s/=.*/=""/'                                     /etc/kubernetes/kubelet
-                systemctl daemon-reload
-                systemctl enable --now kubelet docker kube-proxy 
-                systemctl status kubelet docker kube-proxy
-                echo ">> Check Up"
-                echo "------------------------------------------------------"
-                cat /etc/kubernetes/config
-                echo "------------------------------------------------------"
-                cat /etc/kubernetes/apiserver
-                echo "------------------------------------------------------"
-                cat /etc/kubernetes/kubelet
-                echo "------------------------------------------------------"
-                whoami
-                echo "------------------------------------------------------"
-                hostname
-                echo "------------------------------------------------------"
-                ls /etc/systemd/system/*.wants/
-                echo "------------------------------------------------------"
-                systemctl list-dependencies
-                echo "------------------------------------------------------"
-                systemctl list-jobs
-                echo "------------------------------------------------------"
-                systemctl --state=failed
-                echo "------------------------------------------------------"
+                #cloud-config
+                system_info:
+                  users:
+                    - default
+                    - name: minion
+                      gecos: Kubernetes Interactive User
+                      groups: [wheel, adm, systemd-journal]
+                      lock_passwd: true
+                      sudo: ["ALL=(ALL) NOPASSWD:ALL"]
+                      shell: /bin/bash
+                package_update: true
+                packages:
+                  - python
+                  - kubernetes-node
+                package_upgrade: true
+                bootcmd:
+                  - setenforce 0 
+                  - sed -i '/^SELINUX=/ s/=.*/=permissive/' /etc/selinux/config
+                runcmd:
+                  - sudo su -
+                  - sed -i 's/^KUBE_MASTER=.*/KUBE_MASTER="--master=http://%masterip%:8080"/'      /etc/kubernetes/config 
+                  - sed -i 's/^KUBE_API_SERVER=.*/KUBE_API_SERVER="--api-servers=http://%masterip%:8080"/' /etc/kubernetes/kubelet 
+                  - sed -i 's/^KUBELET_ADDRESS=.*/KUBELET_ADDRESS="--address=0.0.0.0"/'                    /etc/kubernetes/kubelet 
+                  - sed -i 's/^KUBELET_HOSTNAME=.*/KUBELET_HOSTNAME=""/'                                     /etc/kubernetes/kubelet 
+                  - systemctl daemon-reload && systemctl enable --now kubelet docker kube-proxy && systemctl status kubelet docker kube-proxy
+                final_message: "The system is finally up, after $UPTIME seconds. %masterip%"
               params:
                 "%masterip%": {get_attr: [kube_master_floating, ip]}
 
