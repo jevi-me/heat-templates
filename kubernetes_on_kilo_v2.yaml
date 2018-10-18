@@ -20,7 +20,7 @@ parameters:
     description: Image that will be used for the nodes.
     label: Image
     type: string
-    default: ubuntu
+    default: fedora-cloud-28
     hidden: false
     constraints: 
     - custom_constraint: glance.image
@@ -68,7 +68,7 @@ parameters:
   docker_volume_size:
     type: number
     description: size of a cinder volume to allocate to docker for container/image storage
-    default: 5
+    default: 1
 
   wait_condition_timeout:
     type: number
@@ -306,7 +306,7 @@ resources:
         #!/bin/sh
         echo ">> Check Up"
         echo "------------------------------------------------------"
-        cat /etc/sysconfig/heat-params
+        cat /etc/selinux/config
         echo "------------------------------------------------------"
         cat /etc/etcd/etcd.conf
         echo "------------------------------------------------------"
@@ -352,7 +352,7 @@ resources:
         - config: {get_resource: check_up_master}
 
   ########################################
-  ##  Servers
+  ##  Servers and Volumes
   ########################################
   k8s_master:
     type: OS::Nova::Server
@@ -380,6 +380,7 @@ resources:
       min_size: 1
       desired_capacity: { get_param: k8s_node_count }
       max_size: 6
+      cooldown: 200
       resource:
         type: OS::Nova::Server
         properties:
@@ -425,6 +426,16 @@ resources:
                 final_message: "The system is up, after $UPTIME seconds. Master Node is @ %masterip%"
               params:
                 "%masterip%": {get_attr: [kube_master_floating, ip]}
+        type: OS::Cinder::VolumeAttachment
+        properties:
+          instance_uuid: {get_resource: servers}
+          volume_id: {get_resource: k8s_volume}
+
+  k8s_volume:
+    type: OS::Cinder::Volume
+    properties:
+      size: {get_param: docker_volume_size}
+      description: Storage volume for k8s nodes.
 
 outputs:
 
@@ -438,3 +449,17 @@ outputs:
     value: "Pending"
     description: > 
       Links for the various dashboards are as follows:
+
+  scale_up_url:
+    description: >
+      This URL is the webhook to scale up the autoscaling group.  You
+      can invoke the scale-up operation by doing an HTTP POST to this
+      URL; no body nor extra headers are needed.
+    value: {get_attr: [scale_up_policy, alarm_url]}
+
+  scale_dn_url:
+    description: >
+      This URL is the webhook to scale down the autoscaling group.
+      You can invoke the scale-down operation by doing an HTTP POST to
+      this URL; no body nor extra headers are needed.
+    value: {get_attr: [scale_down_policy, alarm_url]}
