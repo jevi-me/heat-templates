@@ -76,6 +76,8 @@ resources:
   ########################################
   scale_up_policy:
     type: OS::Heat::ScalingPolicy
+    depends_on:
+      - k8s_nodes
     properties:
       adjustment_type: change_in_capacity
       auto_scaling_group_id: { get_resource: k8s_nodes }
@@ -84,6 +86,8 @@ resources:
 
   scale_down_policy:
     type: OS::Heat::ScalingPolicy
+    depends_on:
+      - k8s_nodes
     properties:
       adjustment_type: change_in_capacity
       auto_scaling_group_id: { get_resource: k8s_nodes }
@@ -92,8 +96,10 @@ resources:
 
   cpu_alarm_high:
     type: OS::Ceilometer::Alarm
+    depends_on:
+      - scale_up_policy
     properties:
-      description: Scale-up if the average CPU > <scale_up_threshold>% for 1 minute
+      description: Scale-up if the average CPU > 70% for 1 minute
       meter_name: cpu_util
       statistic: avg
       period: 60
@@ -106,6 +112,8 @@ resources:
 
   cpu_alarm_low:
     type: OS::Ceilometer::Alarm
+    depends_on:
+      - scale_down_policy
     properties:
       description: Scale-down if the average CPU < 70% for 10 minutes
       meter_name: cpu_util
