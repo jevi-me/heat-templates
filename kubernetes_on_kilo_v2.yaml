@@ -382,6 +382,7 @@ resources:
       max_size: 6
       cooldown: 200
       resource:
+        k8s_single_node:
         type: OS::Nova::Server
         properties:
           image:    { get_param: image   }
@@ -426,29 +427,28 @@ resources:
                 final_message: "The system is up, after $UPTIME seconds. Master Node is @ %masterip%"
               params:
                 "%masterip%": {get_attr: [kube_master_floating, ip]}
-        type: OS::Cinder::VolumeAttachment
+        k8s_volume:
+        type: OS::Cinder::Volume
         properties:
-          instance_uuid: {get_resource: servers}
-          volume_id: {get_resource: k8s_volume}
-
-  k8s_volume:
-    type: OS::Cinder::Volume
-    properties:
-      size: {get_param: docker_volume_size}
-      description: Storage volume for k8s nodes.
+          size: {get_param: docker_volume_size}
+          description: Storage volume for k8s nodes.
 
 outputs:
-
-  kube_master:
-    value: {get_attr: [kube_master_floating, ip]}
+  ssh_key_name:
     description: >
-      This is the public ip address of the Kubernetes master server.
-      Use this address to log in to the Kubernetes master via ssh or
-      to access the Kubernetes API from outside the cluster.
+      Use this ssh in the command line script to log in to the Kubernetes master via ssh (ssh -i .ssh/<ssh_key_name>.pem fedora@<k8s_masterip>).
+      Get the keypair .pem file from 'Access & Security' and place in the .ssh folder on your computer.
+    value: {get_param: keyname}
+
+  k8s_masterip:
+    description: >
+      Use this ip in the command line script to log in to the Kubernetes master via ssh: ssh -i .ssh/<ssh_key_name>.pem fedora@<k8s_masterip>
+    value: {get_attr: [kube_master_floating, ip]}
+
   dashboard_links:
-    value: "Pending"
     description: > 
       Links for the various dashboards are as follows:
+    value: "Pending"
 
   scale_up_url:
     description: >
