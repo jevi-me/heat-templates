@@ -411,14 +411,14 @@ resources:
                   - flannel
                 bootcmd:
                   - setenforce 0 
-                  - sed -i 's/^SELINUX=.*/^SELINUX=permissive/' /etc/selinux/config
+                  - sed -i 's/SELINUX=.*/SELINUX=permissive/' /etc/selinux/config
                 runcmd:
                   - sudo su -
-                  - sed -i 's/^KUBE_MASTER=.*/KUBE_MASTER=\"--master=http:\/\/%masterip%:8080\"/'      /etc/kubernetes/config 
-                  - sed -i 's/^KUBE_API_SERVER=.*/KUBE_API_SERVER=\"--api-servers=http:\/\/%masterip%:8080\"/' /etc/kubernetes/kubelet 
-                  - sed -i 's/^KUBELET_ADDRESS=.*/KUBELET_ADDRESS=\"--address=0.0.0.0\"/'                    /etc/kubernetes/kubelet 
-                  - sed -i 's/^KUBELET_HOSTNAME=.*/KUBELET_HOSTNAME=\"k8s_node\"/'                                     /etc/kubernetes/kubelet 
-                  - sed -i 's/^FLANNEL_ETCD=.*/^FLANNEL_ETCD="http://%masterip%:2379"/' /etc/sysconfig/flanneld
+                  - sed -i 's/KUBE_MASTER=.*/KUBE_MASTER=\"--master=http:\/\/%masterip%:8080\"/'      /etc/kubernetes/config 
+                  - sed -i 's/KUBE_API_SERVER=.*/KUBE_API_SERVER=\"--api-servers=http:\/\/%masterip%:8080\"/' /etc/kubernetes/kubelet 
+                  - sed -i 's/KUBELET_ADDRESS=.*/KUBELET_ADDRESS=\"--address=0.0.0.0\"/'                    /etc/kubernetes/kubelet 
+                  - sed -i 's/KUBELET_HOSTNAME=.*/KUBELET_HOSTNAME=\"k8s_node\"/'                                     /etc/kubernetes/kubelet 
+                  - sed -i 's/FLANNEL_ETCD=.*/FLANNEL_ETCD="http:\/\/%masterip%:2379"/' /etc/sysconfig/flanneld
                   - sed -i 's/ServiceAccount,//' /etc/kubernetes/apiserver
                   - systemctl daemon-reload && systemctl enable --now kubelet docker kube-proxy flanneld && systemctl status kubelet docker kube-proxy flanneld
                   - kubectl get all --all-namespaces=true
