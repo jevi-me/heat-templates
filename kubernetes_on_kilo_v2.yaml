@@ -70,53 +70,16 @@ parameters:
     description: size of a cinder volume to allocate to docker for container/image storage
     default: 1
 
-  wait_condition_timeout:
-    type: number
-    description : timeout for the Wait Conditions
-    default: 6000
-
-  scale_up_period_length:
-    type: number
-    default: 60
-
-  scale_up_period_count:
-    type: number
-    default: 1
-
-  scale_up_threshold:
-    type: number
-    default: 70
-
-  scale_down_period_length:
-    type: number
-    default: 600
-
-  scale_down_period_count:
-    type: number
-    default: 1
-
-  scale_down_threshold:
-    type: number
-    default: 15
-
-  scale_up_cooldown:
-    type: number
-    default: 120
-
-  scale_down_cooldown:
-    type: number
-    default: 60
-
 resources:
   ########################################
-  ##  Policies and Groups
+  ##  Policies, Alarms, Groups, and IPs
   ########################################
   scale_up_policy:
     type: OS::Heat::ScalingPolicy
     properties:
       adjustment_type: change_in_capacity
       auto_scaling_group_id: { get_resource: k8s_nodes }
-      cooldown: {get_param: scale_up_cooldown}
+      cooldown: 120
       scaling_adjustment: 1
 
   scale_down_policy:
@@ -124,8 +87,36 @@ resources:
     properties:
       adjustment_type: change_in_capacity
       auto_scaling_group_id: { get_resource: k8s_nodes }
-      cooldown: {get_param: scale_down_cooldown}
+      cooldown: 60
       scaling_adjustment: -1
+
+  cpu_alarm_high:
+    type: OS::Ceilometer::Alarm
+    properties:
+      description: Scale-up if the average CPU > <scale_up_threshold>% for 1 minute
+      meter_name: cpu_util
+      statistic: avg
+      period: 60
+      evaluation_periods: 1
+      threshold: 70
+      alarm_actions:
+        - {get_attr: [scale_up_policy, alarm_url]}
+      matching_metadata: {'metadata.user_metadata.stack': {get_param: "OS::stack_id"}}
+      comparison_operator: gt
+
+  cpu_alarm_low:
+    type: OS::Ceilometer::Alarm
+    properties:
+      description: Scale-down if the average CPU < 70% for 10 minutes
+      meter_name: cpu_util
+      statistic: avg
+      period: 600
+      evaluation_periods: 1
+      threshold: 15
+      alarm_actions:
+        - {get_attr: [scale_down_policy, alarm_url]}
+      matching_metadata: {'metadata.user_metadata.stack': {get_param: "OS::stack_id"}}
+      comparison_operator: lt
 
   server_group:
     type: OS::Nova::ServerGroup
@@ -380,9 +371,7 @@ resources:
       min_size: 1
       desired_capacity: { get_param: k8s_node_count }
       max_size: 6
-      cooldown: 200
-      resource:
-        k8s_single_node:
+      resource: 
         type: OS::Nova::Server
         properties:
           image:    { get_param: image   }
@@ -427,11 +416,6 @@ resources:
                 final_message: "The system is up, after $UPTIME seconds. Master Node is @ %masterip%"
               params:
                 "%masterip%": {get_attr: [kube_master_floating, ip]}
-        k8s_volume:
-        type: OS::Cinder::Volume
-        properties:
-          size: {get_param: docker_volume_size}
-          description: Storage volume for k8s nodes.
 
 outputs:
   ssh_key_name:
