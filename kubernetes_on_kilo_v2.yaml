@@ -199,7 +199,7 @@ resources:
         sed -i "s/ETCD_LISTEN_CLIENT_URLS=.*/ETCD_LISTEN_CLIENT_URLS=\"http:\/\/0.0.0.0:2379\"/" /etc/etcd/etcd.conf
         sed -i "s/ETCD_ADVERTISE_CLIENT_URLS=.*/ETCD_ADVERTISE_CLIENT_URLS=\"http:\/\/$masterip:2379\"/" /etc/etcd/etcd.conf
         sed -i 's/ServiceAccount,//' /etc/kubernetes/apiserver
-        sed -i 's/KUBE_API_ADDRESS=.*/KUBE_API_ADDRESS="--insecure-bind-address=0.0.0.0"/' /etc/kubernetes/apiserver
+        sed -i 's/KUBE_API_ADDRESS=.*/KUBE_API_ADDRESS="--address=0.0.0.0"/' /etc/kubernetes/apiserver
         sed -i 's/KUBELET_ADDRESS=.*/KUBELET_ADDRESS="--address=0.0.0.0"/' /etc/kubernetes/kubelet
         sed -i 's/KUBELET_HOSTNAME=.*/KUBELET_HOSTNAME=""/' /etc/kubernetes/kubelet
 
@@ -376,13 +376,13 @@ resources:
                 runcmd:
                   - sudo su -
                   - sed -i "s/KUBE_MASTER=.*/KUBE_MASTER=\"--master=http:\/\/%masterip%:8080\"/"      /etc/kubernetes/config 
-                  - sed -i 's/KUBE_API_SERVER=.*/KUBE_API_SERVER=\"--api-servers=http:\/\/%masterip%:8080\"/' /etc/kubernetes/kubelet 
+                  - sed -i "s/KUBE_API_SERVER=.*/KUBE_API_SERVER=\"--api-servers=http:\/\/%masterip%:8080\"/" /etc/kubernetes/kubelet 
                   - sed -i 's/KUBELET_ADDRESS=.*/KUBELET_ADDRESS=\"--address=0.0.0.0\"/'                    /etc/kubernetes/kubelet 
                   - sed -i 's/KUBELET_HOSTNAME=.*/KUBELET_HOSTNAME=\"k8s_node\"/'                                     /etc/kubernetes/kubelet 
                   - sed -i "s/FLANNEL_ETCD=.*/FLANNEL_ETCD="http:\/\/%masterip%:2379\"/" /etc/sysconfig/flanneld
                   - sed -i 's/ServiceAccount,//' /etc/kubernetes/apiserver
                   - systemctl daemon-reload && systemctl enable --now kubelet docker kube-proxy && systemctl status kubelet docker kube-proxy
-                  - systemctl enable --now flanneld && systemctl status flanneld
+                  - systemctl daemon-reload && systemctl enable --now flanneld && systemctl status flanneld
                   - kubectl get all --all-namespaces=true
                 final_message: "The system is up, after $UPTIME seconds. Master Node is @ %masterip%"
               params:
@@ -396,15 +396,15 @@ outputs:
     value: {get_param: keyname}
 
   kube_masterip:
-    value: {get_attr: [kube_master_floating, ip]}
     description: >
       This is the public ip address of the Kubernetes master server.
       Use this address to log in to the Kubernetes master via ssh. 
+    value: {get_attr: [kube_master_floating, ip]}
 
   dashboard_links:
-    value: "Pending"
     description: > 
       Links for the various dashboards are as follows:
+    value: "Pending"
 
   scale_up_url:
     description: >
