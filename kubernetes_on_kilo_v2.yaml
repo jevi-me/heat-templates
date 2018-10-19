@@ -72,12 +72,12 @@ parameters:
 
 resources:
   ########################################
-  ##  Policies, Alarms, Groups, and IPs
+  ##  Policies, Alarm, Groups and IPs
   ########################################
   scale_up_policy:
-    type: OS::Heat::ScalingPolicy
     depends_on:
       - k8s_nodes
+    type: OS::Heat::ScalingPolicy
     properties:
       adjustment_type: change_in_capacity
       auto_scaling_group_id: { get_resource: k8s_nodes }
@@ -85,46 +85,14 @@ resources:
       scaling_adjustment: 1
 
   scale_down_policy:
-    type: OS::Heat::ScalingPolicy
     depends_on:
       - k8s_nodes
+    type: OS::Heat::ScalingPolicy
     properties:
       adjustment_type: change_in_capacity
       auto_scaling_group_id: { get_resource: k8s_nodes }
       cooldown: 60
       scaling_adjustment: -1
-
-  cpu_alarm_high:
-    type: OS::Ceilometer::Alarm
-    depends_on:
-      - scale_up_policy
-    properties:
-      description: Scale-up if the average CPU > 70% for 1 minute
-      meter_name: cpu_util
-      statistic: avg
-      period: 600
-      evaluation_periods: 1
-      threshold: 70
-      alarm_actions:
-        - {get_attr: [scale_up_policy, alarm_url]}
-      #matching_metadata: {'metadata.user_metadata.stack': {get_param: "OS::stack_id"}}
-      comparison_operator: gt
-
-  cpu_alarm_low:
-    type: OS::Ceilometer::Alarm
-    depends_on:
-      - scale_down_policy
-    properties:
-      description: Scale-down if the average CPU < 70% for 10 minutes
-      meter_name: cpu_util
-      statistic: avg
-      period: 600
-      evaluation_periods: 1
-      threshold: 15
-      alarm_actions:
-        - {get_attr: [scale_down_policy, alarm_url]}
-      #matching_metadata: {'metadata.user_metadata.stack': {get_param: "OS::stack_id"}}
-      comparison_operator: lt
 
   server_group:
     type: OS::Nova::ServerGroup
@@ -216,7 +184,7 @@ resources:
       config: |
         #!/bin/sh
         sudo su -
-        dnf install python kubernetes flannel etcd docker -y
+        dnf install docker python kubernetes flannel etcd -y
 
   ### STAGE 4 -- Configure Files
   configure_master:
@@ -228,12 +196,12 @@ resources:
       config: |
         #!/bin/sh
         masterip=$(ip addr show eth0 | awk '$1 == "inet" {print $2}' | cut -f1 -d/)
-        sed -i '/^KUBE_API_ADDRESS=/ s/=.*/=\"--insecure-bind-address=0.0.0.0\"/' /etc/kubernetes/apiserver
-        sed -i 's/ServiceAccount,//' /etc/kubernetes/apiserver
-        sed -i '/^KUBELET_ADDRESS=/ s/=.*/=\"--address=0.0.0.0\"/' /etc/kubernetes/kubelet
-        sed -i '/^KUBELET_HOSTNAME=/ s/=.*/=\"k8s_master\"/' /etc/kubernetes/kubelet
         sed -i "s/ETCD_LISTEN_CLIENT_URLS=.*/ETCD_LISTEN_CLIENT_URLS=\"http:\/\/0.0.0.0:2379\"/" /etc/etcd/etcd.conf
         sed -i "s/ETCD_ADVERTISE_CLIENT_URLS=.*/ETCD_ADVERTISE_CLIENT_URLS=\"http:\/\/$masterip:2379\"/" /etc/etcd/etcd.conf
+        sed -i 's/ServiceAccount,//' /etc/kubernetes/apiserver
+        sed -i 's/KUBE_API_ADDRESS=.*/KUBE_API_ADDRESS="--insecure-bind-address=0.0.0.0"/' /etc/kubernetes/apiserver
+        sed -i 's/KUBELET_ADDRESS=.*/KUBELET_ADDRESS="--address=0.0.0.0"/' /etc/kubernetes/kubelet
+        sed -i 's/KUBELET_HOSTNAME=.*/KUBELET_HOSTNAME=""/' /etc/kubernetes/kubelet
 
   ### STAGE 5 -- Start Services
   enable_services_master:
@@ -245,7 +213,7 @@ resources:
       config: |
         #!/bin/sh
         systemctl daemon-reload
-        systemctl enable --now etcd kube-apiserver kube-controller-manager kube-scheduler kubelet docker kube-proxy 
+        systemctl enable --now docker etcd kube-apiserver kube-controller-manager kube-scheduler kubelet kube-proxy 
         systemctl status etcd kube-apiserver kube-controller-manager kube-scheduler kubelet docker kube-proxy
 
   ### STAGE 6 -- Start up Flannel
@@ -344,7 +312,7 @@ resources:
         - config: {get_resource: check_up_master}
 
   ########################################
-  ##  Servers and Volumes
+  ##  Servers
   ########################################
   k8s_master:
     type: OS::Nova::Server
@@ -372,7 +340,7 @@ resources:
       min_size: 1
       desired_capacity: { get_param: k8s_node_count }
       max_size: 6
-      resource: 
+      resource:
         type: OS::Nova::Server
         properties:
           image:    { get_param: image   }
@@ -408,20 +376,14 @@ resources:
                 runcmd:
                   - sudo su -
                   - sed -i "s/KUBE_MASTER=.*/KUBE_MASTER=\"--master=http:\/\/%masterip%:8080\"/"      /etc/kubernetes/config 
-                  - sed -i 's/KUBELET_HOSTNAME=.*/KUBELET_HOSTNAME=\"\"/'         /etc/kubernetes/kubelet 
-                  - sed -i 's/KUBELET_ADDRESS=.*/KUBELET_ADDRESS=\"--address=0.0.0.0\"/'                      /etc/kubernetes/kubelet 
-                  - sed -i "s/KUBE_API_SERVER=.*/KUBE_API_SERVER=\"--api-servers=http:\/\/%masterip%:8080\"/" /etc/kubernetes/kubelet 
-                  - sed -i 's/FLANNEL_ETCD=.*/FLANNEL_ETCD=\"http:\/\/%masterip%:2379\"' /etc/sysconfig/flanneld
-                  - sed -i 's/OPTIONS=.*/OPTIONS=\"--log-driver=journald --live-restore\"' /etc/sysconfig/docker
-                  - systemctl daemon-reload && systemctl enable --now docker kubelet kube-proxy && systemctl status kubelet docker kube-proxy
-                  - systemctl enable --now flannel && systemctl status flannel
+                  - sed -i 's/KUBE_API_SERVER=.*/KUBE_API_SERVER=\"--api-servers=http:\/\/%masterip%:8080\"/' /etc/kubernetes/kubelet 
+                  - sed -i 's/KUBELET_ADDRESS=.*/KUBELET_ADDRESS=\"--address=0.0.0.0\"/'                    /etc/kubernetes/kubelet 
+                  - sed -i 's/KUBELET_HOSTNAME=.*/KUBELET_HOSTNAME=\"k8s_node\"/'                                     /etc/kubernetes/kubelet 
+                  - sed -i "s/FLANNEL_ETCD=.*/FLANNEL_ETCD="http:\/\/%masterip%:2379\"/" /etc/sysconfig/flanneld
+                  - sed -i 's/ServiceAccount,//' /etc/kubernetes/apiserver
+                  - systemctl daemon-reload && systemctl enable --now kubelet docker kube-proxy && systemctl status kubelet docker kube-proxy
+                  - systemctl enable --now flanneld && systemctl status flanneld
                   - kubectl get all --all-namespaces=true
-                  - kubectl get nodes
-                  - cat /etc/kubernetes/config 
-                  - cat /etc/sysconfig/docker
-                  - cat /etc/sysconfig/flanneld
-                  - cat /etc/kubernetes/kubelet
-
                 final_message: "The system is up, after $UPTIME seconds. Master Node is @ %masterip%"
               params:
                 "%masterip%": {get_attr: [kube_master_floating, ip]}
@@ -429,19 +391,20 @@ resources:
 outputs:
   ssh_key_name:
     description: >
-      Use this ssh in the command line script to log in to the Kubernetes master via ssh (ssh -i .ssh/<ssh_key_name>.pem fedora@<k8s_masterip>).
+      Use this ssh in the command line script to log in to the Kubernetes master via ssh (ssh -i .ssh/<ssh_key_name>.pem fedora@<kube_masterip>).
       Get the keypair .pem file from 'Access & Security' and place in the .ssh folder on your computer.
     value: {get_param: keyname}
 
-  k8s_masterip:
-    description: >
-      Use this ip in the command line script to log in to the Kubernetes master via ssh: ssh -i .ssh/<ssh_key_name>.pem fedora@<k8s_masterip>
+  kube_masterip:
     value: {get_attr: [kube_master_floating, ip]}
+    description: >
+      This is the public ip address of the Kubernetes master server.
+      Use this address to log in to the Kubernetes master via ssh. 
 
   dashboard_links:
+    value: "Pending"
     description: > 
       Links for the various dashboards are as follows:
-    value: "Pending"
 
   scale_up_url:
     description: >
