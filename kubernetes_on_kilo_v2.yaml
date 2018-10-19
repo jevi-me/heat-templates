@@ -102,12 +102,12 @@ resources:
       description: Scale-up if the average CPU > 70% for 1 minute
       meter_name: cpu_util
       statistic: avg
-      period: 60
+      period: 600
       evaluation_periods: 1
       threshold: 70
       alarm_actions:
         - {get_attr: [scale_up_policy, alarm_url]}
-      matching_metadata: {'metadata.user_metadata.stack': {get_param: "OS::stack_id"}}
+      #matching_metadata: {'metadata.user_metadata.stack': {get_param: "OS::stack_id"}}
       comparison_operator: gt
 
   cpu_alarm_low:
@@ -123,7 +123,7 @@ resources:
       threshold: 15
       alarm_actions:
         - {get_attr: [scale_down_policy, alarm_url]}
-      matching_metadata: {'metadata.user_metadata.stack': {get_param: "OS::stack_id"}}
+      #matching_metadata: {'metadata.user_metadata.stack': {get_param: "OS::stack_id"}}
       comparison_operator: lt
 
   server_group:
@@ -216,7 +216,7 @@ resources:
       config: |
         #!/bin/sh
         sudo su -
-        dnf install python kubernetes flannel etcd -y
+        dnf install python kubernetes flannel etcd docker -y
 
   ### STAGE 4 -- Configure Files
   configure_master:
@@ -228,18 +228,12 @@ resources:
       config: |
         #!/bin/sh
         masterip=$(ip addr show eth0 | awk '$1 == "inet" {print $2}' | cut -f1 -d/)
-        cat > /etc/etcd/etcd.conf <<EOF
-        # [member]
-        ETCD_NAME=default
-        ETCD_DATA_DIR="/var/lib/etcd/default.etcd"
-        ETCD_LISTEN_CLIENT_URLS="http://0.0.0.0:2379"
-        [cluster]
-        ETCD_ADVERTISE_CLIENT_URLS="http://$masterip:2379"
-        EOF
-        sed -i '/^KUBE_API_ADDRESS=/ s/=.*/="--address=0.0.0.0"/' /etc/kubernetes/apiserver
-        sed -i '/^KUBELET_ADDRESS=/ s/=.*/="--address=0.0.0.0"/' /etc/kubernetes/kubelet
+        sed -i '/^KUBE_API_ADDRESS=/ s/=.*/="--insecure-bind-address=0.0.0.0"/' /etc/kubernetes/apiserver
         sed -i 's/ServiceAccount,//' /etc/kubernetes/apiserver
+        sed -i '/^KUBELET_ADDRESS=/ s/=.*/="--address=0.0.0.0"/' /etc/kubernetes/kubelet
         sed -i '/^KUBELET_HOSTNAME=/ s/=.*/="k8s_master"/' /etc/kubernetes/kubelet
+        sed -i 's/ETCD_LISTEN_CLIENT_URLS=.*/ETCD_LISTEN_CLIENT_URLS=\"http:\/\/0.0.0.0:2379\"/' /etc/etcd/etcd.conf
+        sed -i 's/ETCD_ADVERTISE_CLIENT_URLS=.*/ETCD_ADVERTISE_CLIENT_URLS=\"http:\/\/$masterip:2379\"/' /etc/etcd/etcd.conf
 
   ### STAGE 5 -- Start Services
   enable_services_master:
@@ -253,7 +247,6 @@ resources:
         systemctl daemon-reload
         systemctl enable --now etcd kube-apiserver kube-controller-manager kube-scheduler kubelet docker kube-proxy 
         systemctl status etcd kube-apiserver kube-controller-manager kube-scheduler kubelet docker kube-proxy
-        #systemctl enable --now cockpit.socket
 
   ### STAGE 6 -- Start up Flannel
   start_flannel_master:
@@ -405,6 +398,7 @@ resources:
                       sudo: ["ALL=(ALL) NOPASSWD:ALL"]
                       shell: /bin/bash
                 packages:
+                  - docker
                   - python
                   - kubernetes-node
                   - flannel
@@ -414,13 +408,21 @@ resources:
                 runcmd:
                   - sudo su -
                   - sed -i 's/KUBE_MASTER=.*/KUBE_MASTER=\"--master=http:\/\/%masterip%:8080\"/'      /etc/kubernetes/config 
+                  - sed -i 's/KUBELET_HOSTNAME=.*/KUBELET_HOSTNAME=\"--hostname-override=k8s_node\"/'         /etc/kubernetes/kubelet 
+                  - sed -i 's/KUBELET_ADDRESS=.*/KUBELET_ADDRESS=\"--address=0.0.0.0\"/'                      /etc/kubernetes/kubelet 
                   - sed -i 's/KUBE_API_SERVER=.*/KUBE_API_SERVER=\"--api-servers=http:\/\/%masterip%:8080\"/' /etc/kubernetes/kubelet 
-                  - sed -i 's/KUBELET_ADDRESS=.*/KUBELET_ADDRESS=\"--address=0.0.0.0\"/'                    /etc/kubernetes/kubelet 
-                  - sed -i 's/KUBELET_HOSTNAME=.*/KUBELET_HOSTNAME=\"k8s_node\"/'                                     /etc/kubernetes/kubelet 
-                  - sed -i 's/FLANNEL_ETCD=.*/FLANNEL_ETCD="http:\/\/%masterip%:2379"/' /etc/sysconfig/flanneld
-                  - sed -i 's/ServiceAccount,//' /etc/kubernetes/apiserver
-                  - systemctl daemon-reload && systemctl enable --now kubelet docker kube-proxy flanneld && systemctl status kubelet docker kube-proxy flanneld
+                  - sed -i 's/FLANNEL_ETCD=.*/FLANNEL_ETCD=\"http:\/\/%masterip%:2379\"/' /etc/sysconfig/flanneld
+                  - sed -i 's/OPTIONS=.*/OPTIONS=\"--log-driver=journald --live-restore\"' /etc/sysconfig/docker
+                  - systemctl daemon-reload && systemctl enable --now docker kubelet kube-proxy && systemctl status kubelet docker kube-proxy
+                  - systemctl enable flannel && systemctl status flannel
                   - kubectl get all --all-namespaces=true
+                  - journalctl -xe
+                  - systemctl status flanneld.service
+                  - ip a
+                  - kubectl get nodes
+                  - cat cd /etc/sysconfig/docker
+                  - cat /etc/kubernetes/kubelet
+
                 final_message: "The system is up, after $UPTIME seconds. Master Node is @ %masterip%"
               params:
                 "%masterip%": {get_attr: [kube_master_floating, ip]}
