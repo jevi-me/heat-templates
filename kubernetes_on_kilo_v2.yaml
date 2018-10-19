@@ -232,7 +232,7 @@ resources:
         sed -i 's/ServiceAccount,//' /etc/kubernetes/apiserver
         sed -i '/^KUBELET_ADDRESS=/ s/=.*/=\"--address=0.0.0.0\"/' /etc/kubernetes/kubelet
         sed -i '/^KUBELET_HOSTNAME=/ s/=.*/=\"k8s_master\"/' /etc/kubernetes/kubelet
-        sed -i 's/ETCD_LISTEN_CLIENT_URLS=.*/ETCD_LISTEN_CLIENT_URLS=\"http:\/\/0.0.0.0:2379\"/' /etc/etcd/etcd.conf
+        sed -i "s/ETCD_LISTEN_CLIENT_URLS=.*/ETCD_LISTEN_CLIENT_URLS=\"http:\/\/0.0.0.0:2379\"/" /etc/etcd/etcd.conf
         sed -i "s/ETCD_ADVERTISE_CLIENT_URLS=.*/ETCD_ADVERTISE_CLIENT_URLS=\"http:\/\/$masterip:2379\"/" /etc/etcd/etcd.conf
 
   ### STAGE 5 -- Start Services
@@ -271,7 +271,7 @@ resources:
         curl -L --ipv4 http://localhost:2379/v2/keys/atomic.io/network/config -XPUT --data-urlencode value@/etc/sysconfig/flanneld-conf.json
         etcdctl get /atomic.io/network/config
         systemctl daemon-reload
-        systemctl enable flanneld
+        systemctl enable --now flanneld
 
   ### STAGE 7 -- Addons and Run Checks And Verify
   add_ons_master:
@@ -407,20 +407,19 @@ resources:
                   - sed -i 's/SELINUX=.*/SELINUX=permissive/' /etc/selinux/config
                 runcmd:
                   - sudo su -
-                  - sed -i 's/KUBE_MASTER=.*/KUBE_MASTER=\"--master=http:\/\/%masterip%:8080\"/'      /etc/kubernetes/config 
-                  - sed -i 's/KUBELET_HOSTNAME=.*/KUBELET_HOSTNAME=\"--hostname-override=k8s_node\"/'         /etc/kubernetes/kubelet 
+                  - sed -i "s/KUBE_MASTER=.*/KUBE_MASTER=\"--master=http:\/\/%masterip%:8080\"/"      /etc/kubernetes/config 
+                  - sed -i 's/KUBELET_HOSTNAME=.*/KUBELET_HOSTNAME=\"\"/'         /etc/kubernetes/kubelet 
                   - sed -i 's/KUBELET_ADDRESS=.*/KUBELET_ADDRESS=\"--address=0.0.0.0\"/'                      /etc/kubernetes/kubelet 
-                  - sed -i 's/KUBE_API_SERVER=.*/KUBE_API_SERVER=\"--api-servers=http:\/\/%masterip%:8080\"/' /etc/kubernetes/kubelet 
-                  - sed -i 's/FLANNEL_ETCD=.*/FLANNEL_ETCD=\"http:\/\/%masterip%:2379\"/' /etc/sysconfig/flanneld
+                  - sed -i "s/KUBE_API_SERVER=.*/KUBE_API_SERVER=\"--api-servers=http:\/\/%masterip%:8080\"/" /etc/kubernetes/kubelet 
+                  - sed -i 's/FLANNEL_ETCD=.*/FLANNEL_ETCD=\"http:\/\/%masterip%:2379\"' /etc/sysconfig/flanneld
                   - sed -i 's/OPTIONS=.*/OPTIONS=\"--log-driver=journald --live-restore\"' /etc/sysconfig/docker
                   - systemctl daemon-reload && systemctl enable --now docker kubelet kube-proxy && systemctl status kubelet docker kube-proxy
-                  - systemctl enable flannel && systemctl status flannel
+                  - systemctl enable --now flannel && systemctl status flannel
                   - kubectl get all --all-namespaces=true
-                  - journalctl -xe
-                  - systemctl status flanneld.service
-                  - ip a
                   - kubectl get nodes
-                  - cat cd /etc/sysconfig/docker
+                  - cat /etc/kubernetes/config 
+                  - cat /etc/sysconfig/docker
+                  - cat /etc/sysconfig/flanneld
                   - cat /etc/kubernetes/kubelet
 
                 final_message: "The system is up, after $UPTIME seconds. Master Node is @ %masterip%"
