@@ -165,7 +165,7 @@ resources:
         #cloud-config
         merge_how: dict(recurse_array)+list(append)
         bootcmd:
-          dnf upgrade
+          - dnf upgrade -y
 
   ### STAGE 3 -- Install Packages
   install_packages_master:
@@ -200,7 +200,6 @@ resources:
         gpgkey=https://packages.cloud.google.com/yum/doc/yum-key.gpg https://packages.cloud.google.com/yum/doc/rpm-package-key.gpg
         exclude=kube*
         EOF
-        yum install -y kubeadm
 
   ### STAGE 4 -- Configure Files
   configure_master:
@@ -216,6 +215,7 @@ resources:
         net.bridge.bridge-nf-call-iptables = 1
         EOF
         sysctl --system
+        sed -i 's/SELINUX=.*/SELINUX=permissive/' /etc/selinux/config
         masterip=$(ip addr show eth0 | awk '$1 == "inet" {print $2}' | cut -f1 -d/)
         sed -i "s/ETCD_LISTEN_CLIENT_URLS=.*/ETCD_LISTEN_CLIENT_URLS=\"http:\/\/0.0.0.0:2379\"/" /etc/etcd/etcd.conf
         sed -i "s/ETCD_ADVERTISE_CLIENT_URLS=.*/ETCD_ADVERTISE_CLIENT_URLS=\"http:\/\/$masterip:2379\"/" /etc/etcd/etcd.conf
@@ -234,7 +234,8 @@ resources:
       config: |
         #!/bin/sh
         systemctl daemon-reload
-        systemctl enable --now docker etcd kube-apiserver kube-controller-manager kube-scheduler kubelet kube-proxy 
+        systemctl enable --now docker kubelet
+        systemctl enable --now etcd kube-apiserver kube-controller-manager kube-scheduler kube-proxy 
         systemctl status etcd kube-apiserver kube-controller-manager kube-scheduler kubelet docker kube-proxy
 
   ### STAGE 6 -- Start up Flannel
@@ -328,7 +329,8 @@ resources:
       group: ungrouped
       config: |
         #!/bin/sh
-        sudo su -
+        sudo su -;
+        setenforce 0 
         cat <<EOF > /etc/yum.repos.d/kubernetes.repo
         [kubernetes]
         name=Kubernetes
@@ -338,9 +340,16 @@ resources:
         repo_gpgcheck=1
         gpgkey=https://packages.cloud.google.com/yum/doc/yum-key.gpg
                 https://packages.cloud.google.com/yum/doc/rpm-package-key.gpg
+        EOF;
+        dnf refresh -y && dnf install -y docker kubeadm.x86_64
+        masterip=$(ip addr show eth0 | awk '$1 == "inet" {print $2}' | cut -f1 -d/) && route add 10.96.0.1 gw $masterip
+        cat <<EOF >  /etc/sysctl.d/k8s.conf
+        net.bridge.bridge-nf-call-ip6tables = 1
+        net.bridge.bridge-nf-call-iptables = 1
         EOF
-        dnf refresh -y
-        dnf install -y docker kubelet.x86_64 kubeadm.x86_64 kubectl.x86_64 kubernetes-cni.x86_64 
+        sysctl --system
+        systemctl enable --now docker kubelet
+        kubeadm config images pull && kubeadm init
 
 
   ### STAGE 8 - Build
@@ -351,13 +360,13 @@ resources:
         - config: {get_resource: disable_selinux}
         - config: {get_resource: upgrade}
         - config: {get_resource: kube_user}
-        - config: {get_resource: install_kubeadm}
-        #- config: {get_resource: install_packages_master}
-        #- config: {get_resource: configure_master}
-        #- config: {get_resource: enable_services_master}
+        #- config: {get_resource: install_kubeadm}
+        - config: {get_resource: install_packages_master}
+        - config: {get_resource: configure_master}
+        - config: {get_resource: enable_services_master}
         #- config: {get_resource: start_flannel_master}
         #- config: {get_resource: add_ons_master}
-        #- config: {get_resource: check_up_master}
+        - config: {get_resource: check_up_master}
 
   ########################################
   ##  Servers
