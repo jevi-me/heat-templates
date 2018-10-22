@@ -161,7 +161,7 @@ resources:
         #cloud-boothook
         #!/bin/sh
         setenforce 0
-        sed -i '/^SELINUX=/ s/=.*/=permissive/' /etc/selinux/config
+        sed -i '/^SELINUX=/ s/=.*/=disabled/' /etc/selinux/config
 
   kube_user:
     type: OS::Heat::SoftwareConfig
@@ -202,6 +202,11 @@ resources:
       group: ungrouped
       config: |
         #!/bin/sh
+        systemctl disable firewalld
+        dnf remove chrony -y
+        dnf install ntp -y
+        systemctl enable ntpd.service
+        systemctl start ntpd.service
         sudo su -
         cat <<EOF > /etc/yum.repos.d/kubernetes.repo
         [kubernetes]
@@ -213,8 +218,8 @@ resources:
         gpgkey=https://packages.cloud.google.com/yum/doc/yum-key.gpg
                 https://packages.cloud.google.com/yum/doc/rpm-package-key.gpg
         EOF
-        dnf clean dbcache -y && dnf refresh -y && dnf install kubernetes docker.x86_64 flannel.x86_64 etcd.x86_64 -yb
-        dnf remove --duplicates
+        dnf clean dbcache -y && dnf refresh -y && dnf install kubernetes flannel.x86_64 etcd.x86_64 -yb
+        #dnf remove --duplicates
         dnf history
 
   ### STAGE 4 -- Configure Files
@@ -227,20 +232,33 @@ resources:
       config: |
         #!/bin/sh
         cat <<EOF >  /etc/sysctl.d/k8s.conf
-        net.bridge.bridge-nf-call-ip6tables = 1
-        net.bridge.bridge-nf-call-iptables = 1
+        net.bridge.bridge-nf-call-ip6tables= 1
+        net.bridge.bridge-nf-call-iptables= 1
         EOF
         sysctl --system
+        cat <<EOF >> /etc/hosts
+        $masterip    k8s-master.westcloud
+        $masterip    k8s-master
+        EOF
         sed -i 's/SELINUX=.*/SELINUX=permissive/' /etc/selinux/config
         masterip=$(ip addr show eth0 | awk '$1 == "inet" {print $2}' | cut -f1 -d/)
+        #---------ETCD CONFIG:
         sed -i "s/ETCD_LISTEN_CLIENT_URLS=.*/ETCD_LISTEN_CLIENT_URLS=\"http:\/\/0.0.0.0:2379\"/" /etc/etcd/etcd.conf
-        sed -i "s/ETCD_ADVERTISE_CLIENT_URLS=.*/ETCD_ADVERTISE_CLIENT_URLS=\"http:\/\/$masterip:2379\"/" /etc/etcd/etcd.conf
-        sed -i 's/ServiceAccount,//' /etc/kubernetes/apiserver
-        sed -i 's/KUBE_API_ADDRESS=.*/KUBE_API_ADDRESS="--address=0.0.0.0"/' /etc/kubernetes/apiserver
+        sed -i "s/ETCD_ADVERTISE_CLIENT_URLS=.*/ETCD_ADVERTISE_CLIENT_URLS=\"http:\/\/0.0.0.0:2379\"/" /etc/etcd/etcd.conf
+        #---------APISERVER CONFIG:
+        cat <<EOF > /etc/kubernetes/apiserver
+        KUBE_API_ADDRESS="--address=0.0.0.0"
+        KUBE_API_PORT="--port=8080"
+        KUBELET_PORT="--kubelet-port=10250"
+        KUBE_ETCD_SERVERS="--etcd-servers=http://k8s-master:2379"
+        KUBE_SERVICE_ADDRESSES="--service-cluster-ip-range=10.254.0.0/16"
+        KUBE_API_ARGS=""
+        EOF
+        #---------KUBELET CONFIG:
         sed -i 's/KUBELET_ADDRESS=.*/KUBELET_ADDRESS="--address=0.0.0.0"/' /etc/kubernetes/kubelet
         sed -i 's/KUBELET_HOSTNAME=.*/KUBELET_HOSTNAME=""/' /etc/kubernetes/kubelet
-        sed -i "s/KUBE_ETCD_SERVERS=.*/KUBE_ETCD_SERVERS=\"--etcd-servers=http:\/\/$masterip:2379,http:\/\/$masterip:4001\"/" /etc/kubernetes/apiserver
-        #sed -i "s/KUBE_MASTER=.*/KUBE_MASTER=\"--master=http:\/\/$masterip:8080\"/" /etc/kubernetes/config
+        #--------- CONFIG FILE:
+        sed -i "s/KUBE_MASTER=.*/KUBE_MASTER=\"--master=http:\/\/k8s-master:8080\"/" /etc/kubernetes/config
 
 
 
@@ -255,11 +273,23 @@ resources:
         #!/bin/sh
         systemctl daemon-reload
         masterip=$(ip addr show eth0 | awk '$1 == "inet" {print $2}' | cut -f1 -d/)
-        systemctl enable --now docker kubelet
-        systemctl enable --now etcd kube-apiserver kube-controller-manager kubelet docker kube-scheduler kube-proxy  
+        for SERVICES in 
+        #systemctl enable --now 
+        for SERVICES in kube-proxy kubelet flanneld docker; do
+          systemctl restart $SERVICES
+          systemctl enable $SERVICES
+          systemctl status $SERVICES
+        done
+        kubectl config set-cluster default-cluster --server=http://k8s-master:8080
+        kubectl config set-context default-context --cluster=default-cluster --user=default-admin
+        kubectl config use-context default-contexy
+        #systemctl enable --now kube-controller-manager kubelet docker kube-scheduler kube-proxy
+        #kubelet --logtostderr=true --v=0 --address=0.0.0.0 --allow-privileged=false --cgroup-driver=systemd --fail-swap-on=false
+        #kube-controller-manager --logtostderr=true --v=0 --master=http://127.0.0.1:8080 
+        #dockerd-current --add-runtime oci=/usr/libexec/docker/docker-runc-current --default-runtime=oci --authorization-plugin=rhel-push-plugin --containerd /run/containerd.sock --exec-opt native.cgroupdriver=systemd --userland-proxy-path=/usr/libexec/docker/docker-proxy-current --init-path=/usr/libexec/docker/docker-init-current --seccomp-profile=/etc/docker/seccomp.json  --log-driver=journald --live-restore --storage-driver overlay2 --add-registry docker.io --add-registry registry.fedoraproject.org --add-registry quay.io --add-registry registry.access.redhat.com --add-registry registry.centos.org
+        #kube-scheduler --logtostderr=true --v=0 --master=http://127.0.0.1:8080
+        #kube-proxy --logtostderr=true --v=0 --master=http://127.0.0.1:8080
         systemctl status etcd kube-apiserver kube-controller-manager kubelet docker kube-scheduler kube-proxy
-        
-        
 
   ### STAGE 6 -- Start up Flannel
   start_flannel_master:
@@ -274,7 +304,7 @@ resources:
         FLANNEL_JSON=/etc/sysconfig/flanneld-conf.json
         cat > $FLANNEL_JSON <<EOF
         {
-          "Network": "$bmk/12",
+          "Network": "172.30.30.0/12",
           "Subnetlen": 24
           "Backend": {
             "Type": "vxlan"
@@ -283,10 +313,13 @@ resources:
         EOF
         curl -L --ipv4 http://localhost:2379/v2/keys/atomic.io/network/config -XPUT --data-urlencode value@/etc/sysconfig/flanneld-conf.json
         etcdctl get /atomic.io/network/config
+        sed -i 's/FLANNEL_ETCD=.*/FLANNEL_ETCD="http://k8s-master:4001"/' /etc/sysconfig/flanneld
+        #cat <<EOF >> /etc/sysconfig/flanneld 
+        #FLANNEL_OPTIONS="--iface=eth1"
+        #EOF
         systemctl daemon-reload
-        systemctl enable --now flanneld
-        systemctl restart kubelet
-
+        systemctl restart etcd kube-apiserver kube-controller-manager kubelet docker kube-scheduler kube-proxy flanneld
+        systemctl enable --now etcd kube-apiserver kube-controller-manager kubelet docker kube-scheduler kube-proxy flanneld
   ### STAGE 7 -- Addons and Run Checks And Verify
   add_ons_master:
     type: OS::Heat::SoftwareConfig
@@ -383,12 +416,11 @@ resources:
         - config: {get_resource: disable_selinux}
         - config: {get_resource: upgrade}
         - config: {get_resource: kube_user}
-        #- config: {get_resource: install_kubeadm}
         - config: {get_resource: install_packages_master}
         - config: {get_resource: configure_master}
         - config: {get_resource: enable_services_master}
-        #- config: {get_resource: start_flannel_master}
-        #- config: {get_resource: add_ons_master}
+        - config: {get_resource: start_flannel_master}
+        - config: {get_resource: add_ons_master}
         - config: {get_resource: check_up_master}
 
   ########################################
