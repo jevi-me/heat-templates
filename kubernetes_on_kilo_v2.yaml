@@ -121,6 +121,32 @@ resources:
            protocol: tcp
            port_range_min: 22
            port_range_max: 22
+         - remote_ip_prefix: 0.0.0.0/0
+           protocol: tcp
+           port_range_min: 10250
+           port_range_max: 10255
+         - remote_ip_prefix: 0.0.0.0/0
+           protocol: tcp
+           port_range_min: 2379
+           port_range_max: 2380
+         - remote_ip_prefix: 0.0.0.0/0
+           protocol: tcp
+           port_range_min: 6443
+           port_range_max: 6443
+         - remote_ip_prefix: 0.0.0.0/0
+           protocol: tcp
+           port_range_min: 30000
+           port_range_max: 32767
+         - remote_ip_prefix: 0.0.0.0/0
+           protocol: tcp
+           port_range_min: 1
+           port_range_max: 65535
+         - remote_ip_prefix: 0.0.0.0/0
+           protocol: udp
+           port_range_min: 1
+           port_range_max: 65535
+         - remote_ip_prefix: 0.0.0.0/0
+           protocol: icmp
 
   ########################################
   ##  Software Config Parts (Master)
@@ -163,9 +189,8 @@ resources:
     properties:
       group: ungrouped
       config: |
-        #cloud-config
         #!/bin/sh
-          - dnf --refresh upgrade -y
+        dnf upgrade -y
 
   ### STAGE 3 -- Install Packages
   install_packages_master:
@@ -188,7 +213,7 @@ resources:
         gpgkey=https://packages.cloud.google.com/yum/doc/yum-key.gpg
                 https://packages.cloud.google.com/yum/doc/rpm-package-key.gpg
         EOF
-        dnf clean dbcache -y && dnf refresh -y && dnf install docker kubernetes flannel.x86_64 etcd.x86_64 -yb
+        dnf clean dbcache -y && dnf refresh -y && dnf install kubernetes docker.x86_64 flannel.x86_64 etcd.x86_64 -yb
         dnf remove --duplicates
         dnf history
 
@@ -215,7 +240,7 @@ resources:
         sed -i 's/KUBELET_ADDRESS=.*/KUBELET_ADDRESS="--address=0.0.0.0"/' /etc/kubernetes/kubelet
         sed -i 's/KUBELET_HOSTNAME=.*/KUBELET_HOSTNAME=""/' /etc/kubernetes/kubelet
         sed -i "s/KUBE_ETCD_SERVERS=.*/KUBE_ETCD_SERVERS=\"--etcd-servers=http:\/\/$masterip:2379,http:\/\/$masterip:4001\"/" /etc/kubernetes/apiserver
-        sed -i "s/KUBE_MASTER=.*/KUBE_MASTER=\"--master=http:\/\/$masterip:8080\"/" /etc/kubernetes/config
+        #sed -i "s/KUBE_MASTER=.*/KUBE_MASTER=\"--master=http:\/\/$masterip:8080\"/" /etc/kubernetes/config
 
 
 
@@ -232,9 +257,6 @@ resources:
         masterip=$(ip addr show eth0 | awk '$1 == "inet" {print $2}' | cut -f1 -d/)
         systemctl enable --now docker kubelet
         systemctl enable --now etcd kube-apiserver kube-controller-manager kubelet docker kube-scheduler kube-proxy  
-        #kube-scheduler --logtostderr=true --v=0 --master=http://$masterip:8080
-        #kube-proxy --logtostderr=true --v=0 --master=http://$masterip:8080
-        #kube-controller-manager --logtostderr=true --v=0 --master=http://$masterip:8080
         systemctl status etcd kube-apiserver kube-controller-manager kubelet docker kube-scheduler kube-proxy
         
         
