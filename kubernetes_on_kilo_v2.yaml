@@ -220,7 +220,7 @@ resources:
       group: ungrouped
       config: |
         #!/bin/sh
-        dnf install kubernetes flannel.x86_64 etcd.x86_64 -yb
+        dnf install kubernetes etcd.x86_64 -yb
         dnf remove --duplicates
         dnf history
         echo ">> Packages Installed."
@@ -251,45 +251,31 @@ resources:
         KUBE_SERVICE_ADDRESSES="--service-cluster-ip-range=10.254.0.0/16"
         KUBE_API_ARGS=""
         EOF
-        sed -i 's/KUBELET_ADDRESS=.*/KUBELET_ADDRESS="--address=0.0.0.0"/' /etc/kubernetes/kubelet
-        sed -i 's/KUBELET_HOSTNAME=.*/KUBELET_HOSTNAME=""/' /etc/kubernetes/kubelet
+        cat <<EOF > /etc/kubernetes/kubelet
+        KUBELET_ADDRESS="--address=0.0.0.0"
+        KUBELET_PORT="--port=10250"
+        KUBELET_HOSTNAME=""
+        KUBELET_API_SERVER="--api-servers=http://k8s-master:8080"
+        KUBELET_ARGS=""
+        EOF
         sed -i "s/KUBE_MASTER=.*/KUBE_MASTER=\"--master=http:\/\/k8s-master:8080\"/" /etc/kubernetes/config
-        sed -i 's/OPTIONS=.*/OPTIONS="--log-driver=journald --live-restore"' /etc/sysconfig/docker
+        sed -i 's/OPTIONS=.*/OPTIONS=\"--log-driver=journald --live-restore\"/' /etc/sysconfig/docker
         echo ">> Configuration Complete."
 
   ### STAGE 5 -- Start Services
-  enable_services_master_1:
+  enable_services_master:
     type: OS::Heat::SoftwareConfig
     depends_on:
       - configure_master
     properties:
       group: ungrouped
       config: |
-        systemctl enable etcd
-        systemctl start etcd
         #!/bin/sh
-        FLANNEL_JSON=/etc/sysconfig/flanneld-conf.json
-        cat > $FLANNEL_JSON <<EOF
-        {
-          "Network": "172.30.30.0/12",
-          "Subnetlen": 24
-          "Backend": {
-            "Type": "vxlan"
-          }
-        }
-        EOF
-        sed -i "s/FLANNEL_ETCD_ENDPOINTS=.*/FLANNEL_ETCD_ENDPOINTS=\"http:\/\/k8s-master:2379\"/" /etc/sysconfig/flanneld
-        curl -L --ipv4 http://localhost:2379/v2/keys/atomic.io/network/config -XPUT --data-urlencode value@/etc/sysconfig/flanneld-conf.json
-        etcdctl get /atomic.io/network/config
+        systemctl enable etcd kube-apiserver kube-controller-manager kube-scheduler docker
+        systemctl start etcd kube-apiserver kube-controller-manager kube-scheduler docker
         kubectl config set-cluster default-cluster --server=http://k8s-master:8080
         kubectl config set-context default-context --cluster=default-cluster --user=default-admin
         kubectl config use-context default-context
-        systemctl enable kubelet kube-proxy kube-apiserver kube-controller-manager kube-scheduler flanneld docker 
-        systemctl start kube-proxy kube-apiserver kube-controller-manager kube-scheduler
-
-
-
-        systemctl enable --now etcd kube-apiserver kube-controller-manager kubelet docker kube-scheduler kube-proxy flanneld
         echo ">> Kubernetes Services Started.
 
 
@@ -328,8 +314,6 @@ resources:
         echo "------------------------------------------------------"
         cat /etc/kubernetes/apiserver
         echo "------------------------------------------------------"
-        cat /etc/sysconfig/flanneld-conf.json
-        echo "------------------------------------------------------"
         cat /etc/kubernetes/kubelet
         echo "------------------------------------------------------"
         whoami
@@ -345,6 +329,60 @@ resources:
         systemctl --state=failed
         echo "------------------------------------------------------"
         kubectl get nodes --all-namespaces=true
+
+  centos_config:
+    type: OS::Heat::SoftwareConfig        
+    properties:
+      group: ungrouped
+      config: |
+        yum update -y
+        systemctl disable firewalld
+        sed -i 's/SELINUX=.*/SELINUX=disabled/' /etc/selinux/config
+        yum remove chrony -y
+        yum install ntp -y
+        systemctl enable ntpd.service
+        systemctl start ntpd.service
+        masterip=$(ip addr show eth0 | awk '$1 == "inet" {print $2}' | cut -f1 -d/)
+        cat <<EOF >> /etc/hosts
+        $masterip    k8s-master.westcloud
+        $masterip    k8s-master
+        EOF
+        yum install https://cbs.centos.org/repos/virt7-docker-common-release/x86_64/os/Packages/kubernetes-client-1.1.0-0.4.git2bfa9a1.el7.x86_64.rpm -y
+        yum install https://cbs.centos.org/repos/virt7-docker-common-release/x86_64/os/Packages/kubernetes-master-1.1.0-0.4.git2bfa9a1.el7.x86_64.rpm -y 
+        yum install https://cbs.centos.org/repos/virt7-docker-common-release/x86_64/os/Packages/kubernetes-node-1.1.0-0.4.git2bfa9a1.el7.x86_64.rpm -y 
+        yum install https://cbs.centos.org/repos/virt7-docker-common-release/x86_64/os/Packages/kubernetes-1.1.0-0.4.git2bfa9a1.el7.x86_64.rpm -y
+        yum install https://cbs.centos.org/repos/virt7-docker-common-release/x86_64/os/Packages/etcd-2.0.9-1.el7.x86_64.rpm -y
+        yum install https://cbs.centos.org/repos/virt7-docker-common-release/x86_64/os/Packages/flannel-0.2.0-7.el7.x86_64.rpm -y
+        echo ">> OS Initialisation Complete."
+        sed -i "s/KUBE_MASTER=.*/KUBE_MASTER=\"--master=http:\/\/k8s-master:8080\"/" /etc/kubernetes/config
+        sed -i "s/ETCD_LISTEN_CLIENT_URLS=.*/ETCD_LISTEN_CLIENT_URLS=\"http:\/\/0.0.0.0:2379\"/" /etc/etcd/etcd.conf
+        sed -i "s/ETCD_ADVERTISE_CLIENT_URLS=.*/ETCD_ADVERTISE_CLIENT_URLS=\"http:\/\/0.0.0.0:2379\"/" /etc/etcd/etcd.conf
+        cat <<EOF > /etc/kubernetes/apiserver
+        KUBE_API_ADDRESS="--address=0.0.0.0"
+        KUBE_API_PORT="--port=8080"
+        KUBELET_PORT="--kubelet-port=10250"
+        KUBE_ETCD_SERVERS="--etcd-servers=http://k8s-master:2379"
+        KUBE_SERVICE_ADDRESSES="--service-cluster-ip-range=10.254.0.0/16"
+        KUBE_API_ARGS=""
+        EOF
+        cat <<EOF > /etc/kubernetes/kubelet
+        KUBELET_ADDRESS="--address=0.0.0.0"
+        KUBELET_PORT="--port=10250"
+        KUBELET_HOSTNAME=""
+        KUBELET_API_SERVER="--api-servers=http://k8s-master:8080"
+        KUBELET_ARGS=""
+        EOF
+        cat <<EOF > /etc/sysconfig/flanneld
+        FLANNEL_ETCD_ENDPOINTS="https://k8s-master:2379"
+        FLANNEL_ETCD_PREFIX="/kube-centos/network"
+        EOF
+        systemctl start etcd
+        etcdctl mkdir /kube-centos/network
+        etcdctl mk /kube-centos/network/config "{ \"Network\": \"172.30.0.0/16\", \"SubnetLen\": 24, \"Backend\": { \"Type\": \"vxlan\" } }"
+        systemctl restart etcd kube-apiserver kube-controller-manager kube-scheduler kube-proxy docker kubelet flanneld  docker
+        systemctl enable etcd kube-apiserver kube-controller-manager kube-scheduler kube-proxy docker kubelet flanneld  docker
+        echo ">> Configuration Complete."
+
 
   ### INIT BUILD
   kube_master_init:
