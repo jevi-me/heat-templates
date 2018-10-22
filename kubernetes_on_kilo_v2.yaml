@@ -10,6 +10,7 @@ parameters:
     description: Flavor used for instances
     label: Flavor
     type: string
+    default: 2cb70964-721d-47ff-badb-b702898b6fc2
     hidden: false
     constraints:
     - custom_constraint: nova.flavor
@@ -19,7 +20,7 @@ parameters:
     description: Image that will be used for the nodes.
     label: Image
     type: string
-    default: fedora-cloud-28
+    default: a27fca27-2f3c-40c2-93d0-55763ce11320
     hidden: false
     constraints: 
     - custom_constraint: glance.image
@@ -29,7 +30,7 @@ parameters:
     description: Number of machines to deploy as a Kubernetes Minion
     label: Kubernetes Minion Count
     type: number
-    default: 3
+    default: 1
     hidden: false
     constraints:
     - range:
@@ -58,7 +59,7 @@ parameters:
     description: WestGrid project network
     label: Network
     type: string
-    default: jwe-314_network
+    default: a7741f95-0bc1-4424-86ef-2e8f66bcae18
     hidden: false
     constraints:
     - custom_constraint: neutron.network
