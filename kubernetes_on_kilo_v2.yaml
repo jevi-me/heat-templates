@@ -214,8 +214,8 @@ resources:
         sed -i 's/KUBE_API_ADDRESS=.*/KUBE_API_ADDRESS="--address=0.0.0.0"/' /etc/kubernetes/apiserver
         sed -i 's/KUBELET_ADDRESS=.*/KUBELET_ADDRESS="--address=0.0.0.0"/' /etc/kubernetes/kubelet
         sed -i 's/KUBELET_HOSTNAME=.*/KUBELET_HOSTNAME=""/' /etc/kubernetes/kubelet
-        sed -i "s//KUBE_ETCD_SERVERS=\"--etcd-servers=http:\/\/$masterip:2379,http:\/\/$masterip:4001\"/" /etc/kubernetes/apiserver
-        sed -i "s//KUBE_MASTER=\"--master=http:\/\/$masterip:8080\"/" /etc/kubernetes/config
+        sed -i "s/KUBE_ETCD_SERVERS=.*/KUBE_ETCD_SERVERS=\"--etcd-servers=http:\/\/$masterip:2379,http:\/\/$masterip:4001\"/" /etc/kubernetes/apiserver
+        sed -i "s/KUBE_MASTER=.*/KUBE_MASTER=\"--master=http:\/\/$masterip:8080\"/" /etc/kubernetes/config
 
 
 
