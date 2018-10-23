@@ -152,81 +152,147 @@ resources:
   ##  Software Config Parts (Master)
   ########################################
 
-  centos_config:
+  centos_config_master:
     type: OS::Heat::SoftwareConfig        
     properties:
       group: ungrouped
       config: |
         #!/bin/sh
-        #yum update -y
+        sudo su -
+        echo "### Disabling Firewall and SELINUX, enabling NTPD"
         systemctl disable firewalld
         sed -i 's/SELINUX=.*/SELINUX=disabled/' /etc/selinux/config
         yum remove chrony -y
         yum install ntp -y
         systemctl enable ntpd.service
         systemctl start ntpd.service
+        echo "### Writing Master IP to host file"
         masterip=$(ip addr show eth0 | awk '$1 == "inet" {print $2}' | cut -f1 -d/)
         cat <<EOF >> /etc/hosts
         $masterip    k8s-master.westcloud
         $masterip    k8s-master
         EOF
-        yum install https://cbs.centos.org/repos/virt7-docker-common-release/x86_64/os/Packages/kubernetes-client-1.1.0-0.4.git2bfa9a1.el7.x86_64.rpm -y
-        yum install https://cbs.centos.org/repos/virt7-docker-common-release/x86_64/os/Packages/kubernetes-master-1.1.0-0.4.git2bfa9a1.el7.x86_64.rpm -y 
-        yum install https://cbs.centos.org/repos/virt7-docker-common-release/x86_64/os/Packages/kubernetes-node-1.1.0-0.4.git2bfa9a1.el7.x86_64.rpm -y 
-        yum install https://cbs.centos.org/repos/virt7-docker-common-release/x86_64/os/Packages/kubernetes-1.1.0-0.4.git2bfa9a1.el7.x86_64.rpm -y
-        yum install https://cbs.centos.org/repos/virt7-docker-common-release/x86_64/os/Packages/etcd-2.0.9-1.el7.x86_64.rpm -y
-        yum install https://cbs.centos.org/repos/virt7-docker-common-release/x86_64/os/Packages/flannel-0.2.0-7.el7.x86_64.rpm -y
-        echo ">> Package Installation Complete."
-        cat <<EOF > /etc/kubernetes/config
-        KUBE_LOGTOSTDERR="--logtostderr=true"
-        KUBE_LOG_LEVEL="--v=0"
-        KUBE_ALLOW_PRIV="--allow-privileged=false"
-        KUBE_MASTER="--master=http://k8s-master:8080"
-        EOF
-        cat <<EOF > /etc/etcd/etcd.config
-        ETCD_NAME=defaultETCD_DATA_DIR="/var/lib/etcd/default.etcd"
-        ETCD_LISTEN_CLIENT_URLS="http://0.0.0.0:2379"
-        ETCD_ADVERTISE_CLIENT_URLS="http://0.0.0.0:2379"
-        EOF
+        echo "### Installing Packages"
+        yum install https://cbs.centos.org/repos/virt7-docker-common-release/x86_64/os/Packages/kubernetes-client-1.1.0-0.4.git2bfa9a1.el7.x86_64.rpm -yq
+        yum install https://cbs.centos.org/repos/virt7-docker-common-release/x86_64/os/Packages/kubernetes-master-1.1.0-0.4.git2bfa9a1.el7.x86_64.rpm -yq
+        yum install https://cbs.centos.org/repos/virt7-docker-common-release/x86_64/os/Packages/kubernetes-node-1.1.0-0.4.git2bfa9a1.el7.x86_64.rpm -yq 
+        yum install https://cbs.centos.org/repos/virt7-docker-common-release/x86_64/os/Packages/kubernetes-1.1.0-0.4.git2bfa9a1.el7.x86_64.rpm -yq
+        yum install https://cbs.centos.org/repos/virt7-docker-common-release/x86_64/os/Packages/etcd-2.0.9-1.el7.x86_64.rpm -yq
+        yum install https://cbs.centos.org/repos/virt7-docker-common-release/x86_64/os/Packages/flannel-0.2.0-7.el7.x86_64.rpm -yq
+        echo "### Configuring Files"
+        #Backup Files
+        mkdir /etc/kubernetes/originals-backup
+        echo "This folder contains the original copies of all files modified by this script." > /etc/kubernetes/originals-backup/readme.txt
+        cp /etc/kubernetes/* /etc/kubernetes/originals-backup/
+        cp /etc/sysconfig/flanneld /etc/kubernetes/originals-backup/flanneld
+        # ----- Edit: /etc/kubernetes/apiserver
         cat <<EOF > /etc/kubernetes/apiserver
-        KUBE_API_ADDRESS="--address=0.0.0.0"
-        KUBE_API_PORT="--port=8080"
-        KUBELET_PORT="--kubelet-port=10250"
+        # The address on the local server to listen to.
+        KUBE_API_ADDRESS="--insecure-bind-address=0.0.0.0"
+        # Comma separated list of nodes in the etcd cluster
         KUBE_ETCD_SERVERS="--etcd-servers=http://k8s-master:2379"
+        # Address range to use for services
         KUBE_SERVICE_ADDRESSES="--service-cluster-ip-range=10.254.0.0/16"
+        # default admission control policies
+        KUBE_ADMISSION_CONTROL="--admission-control=NamespaceLifecycle,NamespaceExists,LimitRanger,SecurityContextDeny,ResourceQuota"
+        # Add your own!
         KUBE_API_ARGS=""
+        # The orignal verison of this file can be found in /etc/kubernetes/originals-backup/ 
         EOF
-        cat <<EOF > /etc/sysconfig/flanneld
-        FLANNEL_ETCD_ENDPOINTS="http://k8s-master:2379"
-        FLANNEL_ETCD_PREFIX="/kube-centos/network"
+        # ----- Edit: /etc/kubernetes/config
+        cat <<EOF > /etc/kubernetes/config
+        # logging to stderr means we get it in the systemd journal
+        KUBE_LOGTOSTDERR="--logtostderr=true"
+        # journal message level, 0 is debug
+        KUBE_LOG_LEVEL="--v=0"
+        # Should this cluster be allowed to run privileged docker containers
+        KUBE_ALLOW_PRIV="--allow-privileged=false"
+        # How the controller-manager, scheduler, and proxy find the apiserver
+        KUBE_MASTER="--master=http://k8s-master:8080"
+        # The orignal verison of this file can be found in /etc/kubernetes/originals-backup/ 
         EOF
+        # ----- Edit: /etc/etcd/etcd.conf
+        cat <<EOF > /etc/etcd/etcd.conf
+        # [member]
+        ETCD_NAME=default
+        ETCD_DATA_DIR="/var/lib/etcd/default.etcd"
+        ETCD_LISTEN_CLIENT_URLS="http://0.0.0.0:2379,http://0.0.0.0:4001"
+        #
+        #[cluster]
+        ETCD_ADVERTISE_CLIENT_URLS="http://0.0.0.0:2379,http://0.0.0.0:4001"
+        # The orignal verison of this file can be found in /etc/kubernetes/originals-backup/ 
+        EOF
+        #  ---- Edit: /etc/kubernetes/kubelet
         cat <<EOF > /etc/kubernetes/kubelet
+        # The address for the info server to serve on (set to 0.0.0.0 or "" for all interfaces)
         KUBELET_ADDRESS="--address=0.0.0.0"
-        KUBELET_PORT="--port=10250"
+        # You may leave this blank to use the actual hostname
         KUBELET_HOSTNAME=""
+        # location of the api-server
         KUBELET_API_SERVER="--api-servers=http://k8s-master:8080"
+        # Add your own!
         KUBELET_ARGS=""
+        # The orignal verison of this file can be found in /etc/kubernetes/originals-backup/ 
         EOF
-        echo ">> File Configurations Complete"
+        # ---- Edit: etc/kubernetes/cloud.conf  ##TODO: HAVE THIS CONFIGURED VIA PARAMS
+        #File information found via the RC file.
+        cat <<EOF > /etc/kubernetes/cloud.conf
+        [Global]
+        auth-url=https://west.cloud.computecanada.ca:5000/v2.0
+        tenant-id=<<REMOVED FOR GIT>>
+        username=<<REMOVED FOR GIT>>
+        password=<<REMOVED FOR GIT>>
+        EOF
+        # ---- Edit:/etc/sysconfig/flanneld
+        cat <<EOF > /etc/sysconfig/flanneld
+        # etcd url location.  Point this to the server where etcd runs
+        FLANNEL_ETCD="http://k8s-master:4001"
+        # etcd config key.  This is the configuration key that flannel queries
+        # For address range assignment
+        FLANNEL_ETCD_KEY="/kube-centos/network"
+        EOF
+        # ---- Edit:/etc/controller-manager 
+        sed -i s'/KUBE_CONTROLLER_MANAGER_ARGS=.*/KUBE_CONTROLLER_MANAGER_ARGS=\"--cloud-provider=openstack --cloud-config=\/etc\/kubernetes\/cloud.conf\"/' /etc/controller-manager
+        # ---- Edit: /etc/sysconfig/docker 
+        sed -i s'/--selinux-enabled/--selinux-enabled=false/' /etc/sysconfig/docker 
+        echo "### Starting ETCD, and configuring key"
         systemctl enable --now etcd
         etcdctl mkdir /kube-centos/network
-        etcdctl mk /kube-centos/network/config "{ \"Network\": \"172.30.30.0/12\", \"Subnetlen\": 24, \"Backend\": { \"Type\": \"vxlan\" }"
+        etcdctl mk /kube-centos/network/config "{ \"Network\": \"172.30.30.0/12\", \"Subnetlen\": 24 \"Backend\": { \"Type\": \"vxlan\" } }"
+        etcdctl get /kube-centos/network/config
         systemctl daemon-reload
-        systemctl restart etcd 
-        systemctl enable etcd kube-apiserver kube-controller-manager kube-scheduler kube-proxy docker kubelet flanneld docker
-        systemctl start etcd kube-apiserver kube-controller-manager kube-scheduler kube-proxy docker kubelet flanneld docker
+        systemctl restart etcd
+        echo "### Starting kube-apiserver service, updating /usr/lib/systemd/system/kube-apiserver.service file, restarting service"
+        systemctl enable --now kube-apiserver
+        cat <<EOF >> /usr/lib/systemd/system/kube-apiserver.service
+        [Service]
+        PermissionsStartOnly=yes
+        ExecStartPre=/usr/bin/mkdir -p /var/run/kubernetes
+        ExecStartPre=/usr/bin/chown kube.kube /var/run/kubernetes
+        systemctl daemon-reload
+        systemctl restart kube-apiserver
+        EOF
+        echo "### Starting remaining services ~> kube-controller-manager flanneld kube-scheduler docker kube-proxy kubelet"
+        for service in kube-controller-manager flanneld kube-scheduler docker kube-proxy kubelet; do 
+          systemctl enable --now $service
+        done
+        echo "### Cluster config"
         kubectl config set-cluster default-cluster --server=http://k8s-master:8080
         kubectl config set-context default-context --cluster=default-cluster --user=default-admin
         kubectl config use-context default-context
+        echo "### System Checks"
+        systemctl is-system-running
+        for service in etcd kube-apiserver kube-controller-manager flanneld kube-scheduler docker kube-proxy kubelet; do 
+          systemctl status $service -l
+        done
         kubectl get nodes
-        echo ">> Services Started"
 
   ### INIT BUILD
   kube_master_init:
     type: OS::Heat::MultipartMime
     properties:
       parts:
-        - config: {get_resource: centos_config}
+        - config: {get_resource: centos_config_master}
 
   ########################################
   ##  Servers
