@@ -20,7 +20,7 @@ parameters:
     description: Image that will be used for the nodes.
     label: Image
     type: string
-    default: a27fca27-2f3c-40c2-93d0-55763ce11320
+    default: 2cd245b5-9290-45d6-87fe-69c0b837659f
     hidden: false
     constraints: 
     - custom_constraint: glance.image
@@ -152,190 +152,13 @@ resources:
   ##  Software Config Parts (Master)
   ########################################
 
-  ### STAGE 1 -- OS Initialisation
-  disable_selinux:
-    type: OS::Heat::SoftwareConfig
-    properties:
-      group: ungrouped
-      config: |
-        #cloud-boothook
-        #!/bin/sh
-        sudo su -
-        setenforce 0; sed -i 's/SELINUX=.*/SELINUX=disabled/' /etc/selinux/config
-
-  create_user:
-    type: OS::Heat::SoftwareConfig
-    depends_on:
-      - disable_selinux
-    properties:
-      group: ungrouped
-      config: |
-        #cloud-config
-        system_info:
-          users:
-            - default
-            - name: minion
-              gecos: Kubernetes Interactive User
-              groups: [wheel, adm, systemd-journal]
-              lock_passwd: true
-              sudo: ["ALL=(ALL) NOPASSWD:ALL"]
-              shell: /bin/bash
-
-  upgrade_and_setup:
-    type: OS::Heat::SoftwareConfig
-    depends_on:
-      - create_user
-    properties:
-      group: ungrouped
-      config: |
-        #!/bin/sh
-        #dnf upgrade -y
-        echo ">> Skipping dnf upgrade for now. It is killing the start up of the instance."
-        systemctl disable firewalld
-        dnf remove chrony -y
-        dnf install ntp -y
-        systemctl enable ntpd.service
-        systemctl start ntpd.service
-        systemctl enable ntpd
-        systemctl start ntpd
-        cat <<EOF > /etc/yum.repos.d/kubernetes.repo
-        [kubernetes]
-        name=Kubernetes
-        baseurl=https://packages.cloud.google.com/yum/repos/kubernetes-el7-x86_64
-        enabled=1
-        gpgcheck=1
-        repo_gpgcheck=1
-        gpgkey=https://packages.cloud.google.com/yum/doc/yum-key.gpg
-                https://packages.cloud.google.com/yum/doc/rpm-package-key.gpg
-        EOF
-        dnf clean dbcache -y ; dnf refresh -y
-        echo ">> OS Initialisation Complete."
-
-  ### STAGE 2 -- Install Packages
-  install_packages_master:
-    type: OS::Heat::SoftwareConfig
-    depends_on:
-      - upgrade_and_setup
-    properties:
-      group: ungrouped
-      config: |
-        #!/bin/sh
-        dnf install kubernetes etcd.x86_64 -yb
-        dnf remove --duplicates
-        dnf history
-        echo ">> Packages Installed."
-
-  ### STAGE 3 -- Configure Files
-  configure_master:
-    type: OS::Heat::SoftwareConfig
-    depends_on:
-      - install_packages_master
-    properties:
-      group: ungrouped
-      config: |
-        #!/bin/sh
-        masterip=$(ip addr show eth0 | awk '$1 == "inet" {print $2}' | cut -f1 -d/)
-        cat <<EOF > /etc/hosts
-        127.0.0.1    localhost localhost.localdomain localhost4 localhost4.localdomain4
-        ::1          localhost localhost.localdomain localhost6 localhost6.localdomain6
-        $masterip    k8s-master.westcloud
-        $masterip    k8s-master
-        EOF
-        sed -i "s/ETCD_LISTEN_CLIENT_URLS=.*/ETCD_LISTEN_CLIENT_URLS=\"http:\/\/0.0.0.0:2379\"/" /etc/etcd/etcd.conf
-        sed -i "s/ETCD_ADVERTISE_CLIENT_URLS=.*/ETCD_ADVERTISE_CLIENT_URLS=\"http:\/\/0.0.0.0:2379\"/" /etc/etcd/etcd.conf
-        cat <<EOF > /etc/kubernetes/apiserver
-        KUBE_API_ADDRESS="--address=0.0.0.0"
-        KUBE_API_PORT="--port=8080"
-        KUBELET_PORT="--kubelet-port=10250"
-        KUBE_ETCD_SERVERS="--etcd-servers=http://k8s-master:2379"
-        KUBE_SERVICE_ADDRESSES="--service-cluster-ip-range=10.254.0.0/16"
-        KUBE_API_ARGS=""
-        EOF
-        cat <<EOF > /etc/kubernetes/kubelet
-        KUBELET_ADDRESS="--address=0.0.0.0"
-        KUBELET_PORT="--port=10250"
-        KUBELET_HOSTNAME=""
-        KUBELET_API_SERVER="--api-servers=http://k8s-master:8080"
-        KUBELET_ARGS=""
-        EOF
-        sed -i "s/KUBE_MASTER=.*/KUBE_MASTER=\"--master=http:\/\/k8s-master:8080\"/" /etc/kubernetes/config
-        sed -i 's/OPTIONS=.*/OPTIONS=\"--log-driver=journald --live-restore\"/' /etc/sysconfig/docker
-        echo ">> Configuration Complete."
-
-  ### STAGE 5 -- Start Services
-  enable_services_master:
-    type: OS::Heat::SoftwareConfig
-    depends_on:
-      - configure_master
-    properties:
-      group: ungrouped
-      config: |
-        #!/bin/sh
-        systemctl enable etcd kube-apiserver kube-controller-manager kube-scheduler docker
-        systemctl start etcd kube-apiserver kube-controller-manager kube-scheduler docker
-        kubectl config set-cluster default-cluster --server=http://k8s-master:8080
-        kubectl config set-context default-context --cluster=default-cluster --user=default-admin
-        kubectl config use-context default-context
-        echo ">> Kubernetes Services Started.
-
-
-  ### STAGE 7 -- Addons and Run Checks And Verify
-  add_ons_master:
-    type: OS::Heat::SoftwareConfig
-    depends_on:
-      - start_flannel_master
-    properties:
-      group: ungrouped
-      config: |
-        #!/bin/sh
-        echo ">> Applying Addons"
-        kubectl apply -f https://raw.githubusercontent.com/kubernetes/dashboard/master/src/deploy/recommended/kubernetes-dashboard.yaml
-        kubectl apply -f https://raw.githubusercontent.com/giantswarm/kubernetes-prometheus/master/manifests-all.yaml
-        kubectl get all --all-namespaces=true
-        echo ">> ... END Applying Addons"
-
-  check_up_master:
-    type: OS::Heat::SoftwareConfig
-    depends_on:
-      - add_ons_master
-    properties:
-      group: ungrouped
-      config: |
-        #!/bin/sh
-        echo ">> Check Up"
-        echo "------------------------------------------------------"
-        cat /etc/selinux/config
-        echo "------------------------------------------------------"
-        cat /etc/etcd/etcd.conf
-        echo "------------------------------------------------------"
-        cat /etc/sysconfig/flanneld
-        echo "------------------------------------------------------"
-        cat /etc/kubernetes/config
-        echo "------------------------------------------------------"
-        cat /etc/kubernetes/apiserver
-        echo "------------------------------------------------------"
-        cat /etc/kubernetes/kubelet
-        echo "------------------------------------------------------"
-        whoami
-        echo "------------------------------------------------------"
-        hostname
-        echo "------------------------------------------------------"
-        ls /etc/systemd/system/*.wants/
-        echo "------------------------------------------------------"
-        systemctl list-dependencies
-        echo "------------------------------------------------------"
-        systemctl list-jobs
-        echo "------------------------------------------------------"
-        systemctl --state=failed
-        echo "------------------------------------------------------"
-        kubectl get nodes --all-namespaces=true
-
   centos_config:
     type: OS::Heat::SoftwareConfig        
     properties:
       group: ungrouped
       config: |
-        yum update -y
+        #!/bin/sh
+        #yum update -y
         systemctl disable firewalld
         sed -i 's/SELINUX=.*/SELINUX=disabled/' /etc/selinux/config
         yum remove chrony -y
@@ -353,10 +176,18 @@ resources:
         yum install https://cbs.centos.org/repos/virt7-docker-common-release/x86_64/os/Packages/kubernetes-1.1.0-0.4.git2bfa9a1.el7.x86_64.rpm -y
         yum install https://cbs.centos.org/repos/virt7-docker-common-release/x86_64/os/Packages/etcd-2.0.9-1.el7.x86_64.rpm -y
         yum install https://cbs.centos.org/repos/virt7-docker-common-release/x86_64/os/Packages/flannel-0.2.0-7.el7.x86_64.rpm -y
-        echo ">> OS Initialisation Complete."
-        sed -i "s/KUBE_MASTER=.*/KUBE_MASTER=\"--master=http:\/\/k8s-master:8080\"/" /etc/kubernetes/config
-        sed -i "s/ETCD_LISTEN_CLIENT_URLS=.*/ETCD_LISTEN_CLIENT_URLS=\"http:\/\/0.0.0.0:2379\"/" /etc/etcd/etcd.conf
-        sed -i "s/ETCD_ADVERTISE_CLIENT_URLS=.*/ETCD_ADVERTISE_CLIENT_URLS=\"http:\/\/0.0.0.0:2379\"/" /etc/etcd/etcd.conf
+        echo ">> Package Installation Complete."
+        cat <<EOF > /etc/kubernetes/config
+        KUBE_LOGTOSTDERR="--logtostderr=true"
+        KUBE_LOG_LEVEL="--v=0"
+        KUBE_ALLOW_PRIV="--allow-privileged=false"
+        KUBE_MASTER="--master=http://k8s-master:8080"
+        EOF
+        cat <<EOF > /etc/etcd/etcd.config
+        ETCD_NAME=defaultETCD_DATA_DIR="/var/lib/etcd/default.etcd"
+        ETCD_LISTEN_CLIENT_URLS="http://0.0.0.0:2379"
+        ETCD_ADVERTISE_CLIENT_URLS="http://0.0.0.0:2379"
+        EOF
         cat <<EOF > /etc/kubernetes/apiserver
         KUBE_API_ADDRESS="--address=0.0.0.0"
         KUBE_API_PORT="--port=8080"
@@ -365,6 +196,10 @@ resources:
         KUBE_SERVICE_ADDRESSES="--service-cluster-ip-range=10.254.0.0/16"
         KUBE_API_ARGS=""
         EOF
+        cat <<EOF > /etc/sysconfig/flanneld
+        FLANNEL_ETCD_ENDPOINTS="http://k8s-master:2379"
+        FLANNEL_ETCD_PREFIX="/kube-centos/network"
+        EOF
         cat <<EOF > /etc/kubernetes/kubelet
         KUBELET_ADDRESS="--address=0.0.0.0"
         KUBELET_PORT="--port=10250"
@@ -372,32 +207,26 @@ resources:
         KUBELET_API_SERVER="--api-servers=http://k8s-master:8080"
         KUBELET_ARGS=""
         EOF
-        cat <<EOF > /etc/sysconfig/flanneld
-        FLANNEL_ETCD_ENDPOINTS="https://k8s-master:2379"
-        FLANNEL_ETCD_PREFIX="/kube-centos/network"
-        EOF
-        systemctl start etcd
+        echo ">> File Configurations Complete"
+        systemctl enable --now etcd
         etcdctl mkdir /kube-centos/network
-        etcdctl mk /kube-centos/network/config "{ \"Network\": \"172.30.0.0/16\", \"SubnetLen\": 24, \"Backend\": { \"Type\": \"vxlan\" } }"
-        systemctl restart etcd kube-apiserver kube-controller-manager kube-scheduler kube-proxy docker kubelet flanneld  docker
-        systemctl enable etcd kube-apiserver kube-controller-manager kube-scheduler kube-proxy docker kubelet flanneld  docker
-        echo ">> Configuration Complete."
-
+        etcdctl mk /kube-centos/network/config "{ \"Network\": \"172.30.30.0/12\", \"Subnetlen\": 24, \"Backend\": { \"Type\": \"vxlan\" }"
+        systemctl daemon-reload
+        systemctl restart etcd 
+        systemctl enable etcd kube-apiserver kube-controller-manager kube-scheduler kube-proxy docker kubelet flanneld docker
+        systemctl start etcd kube-apiserver kube-controller-manager kube-scheduler kube-proxy docker kubelet flanneld docker
+        kubectl config set-cluster default-cluster --server=http://k8s-master:8080
+        kubectl config set-context default-context --cluster=default-cluster --user=default-admin
+        kubectl config use-context default-context
+        kubectl get nodes
+        echo ">> Services Started"
 
   ### INIT BUILD
   kube_master_init:
     type: OS::Heat::MultipartMime
     properties:
       parts:
-        - config: {get_resource: disable_selinux}
-        - config: {get_resource: upgrade}
-        - config: {get_resource: kube_user}
-        - config: {get_resource: install_packages_master}
-        - config: {get_resource: configure_master}
-        - config: {get_resource: enable_services_master}
-        - config: {get_resource: start_flannel_master}
-       # - config: {get_resource: add_ons_master}
-        - config: {get_resource: check_up_master}
+        - config: {get_resource: centos_config}
 
   ########################################
   ##  Servers
