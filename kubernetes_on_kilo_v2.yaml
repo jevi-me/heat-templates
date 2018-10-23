@@ -157,10 +157,11 @@ resources:
       group: ungrouped
       config: |
         #!/bin/sh
+        yum upgrade -y -q 
         systemctl disable firewalld
         sed -i 's/SELINUX=.*/SELINUX=disabled/' /etc/selinux/config
-        yum remove chrony -yq
-        yum install ntp -yq
+        yum remove chrony -y -q
+        yum install ntp -y -q
         systemctl enable ntpd.service
         systemctl start ntpd.service
 
@@ -171,12 +172,12 @@ resources:
       config: |
         #!/bin/sh
         sudo su -
-        yum install https://cbs.centos.org/repos/virt7-docker-common-release/x86_64/os/Packages/kubernetes-client-1.1.0-0.4.git2bfa9a1.el7.x86_64.rpm -yq
-        yum install https://cbs.centos.org/repos/virt7-docker-common-release/x86_64/os/Packages/kubernetes-master-1.1.0-0.4.git2bfa9a1.el7.x86_64.rpm -yq
-        yum install https://cbs.centos.org/repos/virt7-docker-common-release/x86_64/os/Packages/kubernetes-node-1.1.0-0.4.git2bfa9a1.el7.x86_64.rpm -yq 
-        yum install https://cbs.centos.org/repos/virt7-docker-common-release/x86_64/os/Packages/kubernetes-1.1.0-0.4.git2bfa9a1.el7.x86_64.rpm -yq
-        yum install https://cbs.centos.org/repos/virt7-docker-common-release/x86_64/os/Packages/etcd-2.0.9-1.el7.x86_64.rpm -yq
-        yum install https://cbs.centos.org/repos/virt7-docker-common-release/x86_64/os/Packages/flannel-0.2.0-7.el7.x86_64.rpm -yq
+        yum install https://cbs.centos.org/repos/virt7-docker-common-release/x86_64/os/Packages/kubernetes-client-1.1.0-0.4.git2bfa9a1.el7.x86_64.rpm -y -q
+        yum install https://cbs.centos.org/repos/virt7-docker-common-release/x86_64/os/Packages/kubernetes-master-1.1.0-0.4.git2bfa9a1.el7.x86_64.rpm -y -q
+        yum install https://cbs.centos.org/repos/virt7-docker-common-release/x86_64/os/Packages/kubernetes-node-1.1.0-0.4.git2bfa9a1.el7.x86_64.rpm -y -q 
+        yum install https://cbs.centos.org/repos/virt7-docker-common-release/x86_64/os/Packages/kubernetes-1.1.0-0.4.git2bfa9a1.el7.x86_64.rpm -y -q
+        yum install https://cbs.centos.org/repos/virt7-docker-common-release/x86_64/os/Packages/etcd-2.0.9-1.el7.x86_64.rpm -y -q
+        yum install https://cbs.centos.org/repos/virt7-docker-common-release/x86_64/os/Packages/flannel-0.2.0-7.el7.x86_64.rpm -y -q
 
   configure_files_master:
     type: OS::Heat::SoftwareConfig        
@@ -322,7 +323,144 @@ resources:
       metadata: 
         kube_group: k8scluster,vault,nofloating
       user_data_format: RAW
-      user_data: {get_resource: kube_master_init}
+      user_data: 
+        user_data:
+          str_replace:
+            template: |
+              #!/bin/sh
+              yum upgrade -y -q 
+              systemctl disable firewalld
+              sed -i 's/SELINUX=.*/SELINUX=disabled/' /etc/selinux/config
+              yum remove chrony -y -q
+              yum install ntp -y -q
+              systemctl enable ntpd.service
+              systemctl start ntpd.service
+
+              yum install https://cbs.centos.org/repos/virt7-docker-common-release/x86_64/os/Packages/kubernetes-client-1.1.0-0.4.git2bfa9a1.el7.x86_64.rpm -y -q
+              yum install https://cbs.centos.org/repos/virt7-docker-common-release/x86_64/os/Packages/kubernetes-master-1.1.0-0.4.git2bfa9a1.el7.x86_64.rpm -y -q
+              yum install https://cbs.centos.org/repos/virt7-docker-common-release/x86_64/os/Packages/kubernetes-node-1.1.0-0.4.git2bfa9a1.el7.x86_64.rpm -y -q 
+              yum install https://cbs.centos.org/repos/virt7-docker-common-release/x86_64/os/Packages/kubernetes-1.1.0-0.4.git2bfa9a1.el7.x86_64.rpm -y -q
+              yum install https://cbs.centos.org/repos/virt7-docker-common-release/x86_64/os/Packages/etcd-2.0.9-1.el7.x86_64.rpm -y -q
+              yum install https://cbs.centos.org/repos/virt7-docker-common-release/x86_64/os/Packages/flannel-0.2.0-7.el7.x86_64.rpm -y -q
+
+              masterip=$(ip addr show eth0 | awk '$1 == "inet" {print $2}' | cut -f1 -d/)
+              cat <<EOF >> /etc/hosts
+              $masterip    k8s-master.westcloud
+              $masterip    k8s-master
+              EOF
+              mkdir /etc/kubernetes/originals-backup
+              echo "This folder contains the original copies of all files modified by this script." > /etc/kubernetes/originals-backup/readme.txt
+              cp /etc/kubernetes/apiserver /etc/kubernetes/originals-backup/apiserver
+              cp /etc/kubernetes/config /etc/kubernetes/originals-backup/config
+              cp /etc/etcd/etcd.conf /etc/kubernetes/originals-backup/etcd.conf
+              cp /etc/kubernetes/kubelet /etc/kubernetes/originals-backup/kubelet
+              cp /etc/sysconfig/flanneld /etc/kubernetes/originals-backup/flanneld
+              cp /etc/kubernetes/controller-manager /etc/kubernetes/originals-backup/controller-manager
+              cp /etc/sysconfig/docker  /etc/kubernetes/originals-backup/docker
+
+              cat <<EOF > /etc/kubernetes/apiserver
+              # The address on the local server to listen to.
+              KUBE_API_ADDRESS="--insecure-bind-address=0.0.0.0"
+              # The port on the local server to listen on.
+              KUBE_API_PORT="--port=8080"
+              # Port minions listen on
+              KUBELET_PORT="--kubelet-port=10250"
+              # Comma separated list of nodes in the etcd cluster
+              KUBE_ETCD_SERVERS="--etcd-servers=http://k8s-master:2379,http://k8s-master:4001"
+              # Address range to use for services
+              KUBE_SERVICE_ADDRESSES="--service-cluster-ip-range=10.254.0.0/16"
+              # default admission control policies
+              KUBE_ADMISSION_CONTROL="--admission-control=NamespaceLifecycle,NamespaceExists,LimitRanger,ResourceQuota"
+              # Add your own!
+              KUBE_API_ARGS=""
+              EOF
+
+              cat <<EOF > /etc/kubernetes/config
+              # logging to stderr means we get it in the systemd journal
+              KUBE_LOGTOSTDERR="--logtostderr=true"
+              # journal message level, 0 is debug
+              KUBE_LOG_LEVEL="--v=0"
+              # Should this cluster be allowed to run privileged docker containers
+              KUBE_ALLOW_PRIV="--allow-privileged=false"
+              # How the controller-manager, scheduler, and proxy find the apiserver
+              KUBE_MASTER="--master=http://k8s-master:8080"
+              EOF
+
+              cat <<EOF > /etc/etcd/etcd.conf
+              # [member]
+              ETCD_NAME=default
+              ETCD_DATA_DIR="/var/lib/etcd/default.etcd"
+              ETCD_LISTEN_CLIENT_URLS="http://0.0.0.0:2379,http://0.0.0.0:4001"
+              #[cluster]
+              ETCD_ADVERTISE_CLIENT_URLS="http://0.0.0.0:2379,http://0.0.0.0:4001"
+              EOF
+
+              cat <<EOF > /etc/kubernetes/kubelet
+              # The address for the info server to serve on (set to 0.0.0.0 or "" for all interfaces)
+              KUBELET_ADDRESS="--address=0.0.0.0"
+              # You may leave this blank to use the actual hostname
+              KUBELET_HOSTNAME=""
+              # location of the api-server
+              KUBELET_API_SERVER="--api-servers=http://k8s-master:8080"
+              # Add your own!
+              KUBELET_ARGS=""
+              EOF
+
+              cat <<EOF > /etc/kubernetes/cloud.conf
+              [Global]
+              auth-url=%ostack_auth_url%
+              tenant-id=%ostack_tenant%
+              username=%ostack_username%
+              password=%ostack_password%
+              EOF
+
+              cat <<EOF > /etc/sysconfig/flanneld
+              # etcd url location.  Point this to the server where etcd runs
+              FLANNEL_ETCD="http://k8s-master:4001"
+              # etcd config key.  This is the configuration key that flannel queries
+              # For address range assignment
+              FLANNEL_ETCD_KEY="/kube-centos/network"
+              EOF
+
+              sed -i 's/KUBE_CONTROLLER_MANAGER_ARGS=.*/KUBE_CONTROLLER_MANAGER_ARGS=\"--cloud-provider=openstack --cloud-config=\/etc\/kubernetes\/cloud.conf\"/' /etc/kubernetes/controller-manager
+              sed -i 's/OPTIONS=.*/OPTIONS=\"--selinux-enabled=false --log-driver=journald --signature-verification=false\"/' /etc/sysconfig/docker
+
+              systemctl enable --now etcd
+              etcdctl mkdir /kube-centos/network
+              etcdctl mk /kube-centos/network/config "{ \"Network\": \"172.30.30.0/12\", \"SubnetLen\": 24, \"Backend\": { \"Type\": \"vxlan\" } }"
+              systemctl daemon-reload
+              systemctl restart etcd
+
+              systemctl enable --now kube-apiserver
+              cat <<EOF >> /usr/lib/systemd/system/kube-apiserver.service
+              [Service]
+              PermissionsStartOnly=yes
+              ExecStartPre=/usr/bin/mkdir -p /var/run/kubernetes
+              ExecStartPre=/usr/bin/chown kube.kube /var/run/kubernetes
+              EOF
+              systemctl daemon-reload
+              systemctl restart kube-apiserver
+
+              for service in kube-controller-manager flanneld kube-scheduler docker kube-proxy kubelet; do 
+                systemctl enable --now $service
+              done
+
+              kubectl config set-cluster default-cluster --server=http://k8s-master:8080
+              kubectl config set-context default-context --cluster=default-cluster --user=default-admin
+              kubectl config use-context default-context
+
+              systemctl is-system-running
+              for service in etcd kube-apiserver kube-controller-manager flanneld kube-scheduler docker kube-proxy kubelet; do 
+                systemctl status -l $service
+              done
+
+              kubectl get nodes
+            params:
+              ostack_auth_url: { get_param: ostack_auth-url }
+              ostack_tenant:   { get_param: ostack_tenant   }
+              ostack_username: { get_param: ostack_username }
+              ostack_password: { get_param: ostack_password }
+
 
   k8s_nodes:
     type: OS::Heat::AutoScalingGroup
