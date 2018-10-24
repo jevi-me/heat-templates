@@ -184,7 +184,7 @@ resources:
            protocol: icmp
 
   ########################################
-  ##  Servers
+  ##  Servers and Volumes
   ########################################
   k8s_master:
     type: OS::Nova::Server
@@ -366,129 +366,11 @@ resources:
             "%ostack_username%": { get_param: ostack_username }
             "%ostack_password%": { get_param: ostack_password }
 
-  k8s_minions:
-    type: OS::Heat::ResourceGroup
-    depends_on:
-      - k8s_master
-    properties:
-      count: { get_param: k8s_minion_count }
-      resource_def:
-        type: OS::Nova::Server
-        properties:
-          image:    { get_param: image   }
-          flavor:   { get_param: flavor  }
-          key_name: { get_param: keyname }
-          name: k8s_minion_%index%
-          networks: 
-          - network: { get_param: network_resource }
-          scheduler_hints: { group: { get_resource: server_group } }
-          metadata: 
-            kube_group: k8sminion,k8scluster,nofloating
-          user_data_format: RAW
-          user_data:
-            str_replace:
-              template: |
-                #!/bin/sh
-                os_inits() {
-                systemctl disable firewalld
-                sed -i 's/SELINUX=.*/SELINUX=disabled/' /etc/selinux/config
-                yum remove chrony -y -q
-                yum install ntp -y -q
-                systemctl enable ntpd.service
-                systemctl start ntpd.service
-                }
-                package_install() {
-                yum install https://cbs.centos.org/repos/virt7-docker-common-release/x86_64/os/Packages/kubernetes-client-1.1.0-0.4.git2bfa9a1.el7.x86_64.rpm -y -q
-                yum install https://cbs.centos.org/repos/virt7-docker-common-release/x86_64/os/Packages/kubernetes-master-1.1.0-0.4.git2bfa9a1.el7.x86_64.rpm -y -q
-                yum install https://cbs.centos.org/repos/virt7-docker-common-release/x86_64/os/Packages/kubernetes-node-1.1.0-0.4.git2bfa9a1.el7.x86_64.rpm -y -q 
-                yum install https://cbs.centos.org/repos/virt7-docker-common-release/x86_64/os/Packages/kubernetes-1.1.0-0.4.git2bfa9a1.el7.x86_64.rpm -y -q
-                yum install https://cbs.centos.org/repos/virt7-docker-common-release/x86_64/os/Packages/etcd-2.0.9-1.el7.x86_64.rpm -y -q
-                yum install https://cbs.centos.org/repos/virt7-docker-common-release/x86_64/os/Packages/flannel-0.2.0-7.el7.x86_64.rpm -y -q
-                }
-                config_host() {
-                nodeip=$(ip addr show eth0 | awk '$1 == "inet" {print $2}' | cut -f1 -d/)
-                cat <<EOF >> /etc/hosts
-                $nodeip    k8s-node-%index%.westcloud
-                $nodeip    k8s-node-%index%
-                %masterip%  k8s-master.westcloud
-                %masterip%  k8s-master
-                EOF
-                }
-                backup_files(){
-                mkdir /etc/kubernetes/originals-backup
-                echo "This folder contains the original copies of all files modified by this script." > /etc/kubernetes/originals-backup/readme.txt
-                cp /etc/kubernetes/config /etc/kubernetes/originals-backup/config
-                cp /etc/kubernetes/kubelet /etc/kubernetes/originals-backup/kubelet
-                cp /etc/sysconfig/flanneld /etc/kubernetes/originals-backup/flanneld
-                cp /etc/sysconfig/docker  /etc/kubernetes/originals-backup/docker
-                }
-                config_files() {
-                cat <<EOF > /etc/kubernetes/config
-                # logging to stderr means we get it in the systemd journal
-                KUBE_LOGTOSTDERR="--logtostderr=true"
-                # journal message level, 0 is debug
-                KUBE_LOG_LEVEL="--v=0"
-                # Should this cluster be allowed to run privileged docker containers
-                KUBE_ALLOW_PRIV="--allow-privileged=false"
-                # How the controller-manager, scheduler, and proxy find the apiserver
-                KUBE_MASTER="--master=http://k8s-master:8080"
-                EOF
-                cat <<EOF > /etc/sysconfig/flanneld
-                # etcd url location.  Point this to the server where etcd runs
-                FLANNEL_ETCD="http://k8s-master:4001"
-                # etcd config key.  This is the configuration key that flannel queries
-                # For address range assignment
-                FLANNEL_ETCD_KEY="/kube-centos/network"
-                EOF
-                cat <<EOF > /etc/kubernetes/kubelet
-                # The address for the info server to serve on (set to 0.0.0.0 or "" for all interfaces)
-                KUBELET_ADDRESS="--address=0.0.0.0"
-                # You may leave this blank to use the actual hostname
-                KUBELET_HOSTNAME=""
-                # location of the api-server
-                KUBELET_API_SERVER="--api-servers=http://k8s-master:8080"
-                # Add your own!
-                KUBELET_ARGS=""
-                EOF
-                sed -i 's/OPTIONS=.*/OPTIONS=\"--selinux-enabled=false --log-driver=journald --signature-verification=false\"/' /etc/sysconfig/docker
-                }
-                enable_services() {
-                for services in kube-proxy kublet flanneld docker; do
-                  systemctl enable --now $services
-                  sleep 10
-                done
-                kubectl config set-cluster default-cluster --server=http://k8s-master:8080
-                kubectl config set-context default-context --cluster=default-cluster --user=default-admin
-                kubectl config use-context default-context
-                sleep 10
-                systemctl is-system-running
-                for service in kube-proxy kublet flanneld docker; do
-                  systemctl status -l $service
-                done
-                kubectl get nodes
-                }
-                sleep 600
-                os_inits
-                sleep 10
-                package_install
-                sleep 10
-                config_host
-                sleep 10
-                backup_files
-                sleep 10
-                config_files
-                sleep 10
-                enable_services
-              params: 
-                "%masterip%": {get_attr: [k8s_master_floating, ip]}
-
-  ########################################
-  ##  Volumes
-  ########################################
   master_vol:
     type: OS::Cinder::Volume
     properties:
       size: 8
+      name: k8s_master_vol
 
   master_vol_attach:
     type: OS::Cinder::VolumeAttachment
@@ -496,24 +378,54 @@ resources:
       instance_uuid: {get_resource: k8s_master}
       volume_id: {get_resource: master_vol}
 
-  minion_vols:
-    type: OS::Heat::ResourceGroup
-    properties:
-      count: { get_param: k8s_minion_count }
-      resource_def:
-        type: OS::Cinder::Volume
-        properties:
-          size: { get_param: minion_volume_size}
 
-  minion_vols_attach:
-      type: OS::Heat::ResourceGroup
-      properties:
-        count: { get_param: k8s_minion_count }
-        resource_def:
-          type: OS::Cinder::VolumeAttachment
-          properties:
-            instance_uuid: { get_attr: [k8s_minions,resources.0] }
-            volume_id:     { get_attr: [minion_vols,resources.0] }
+## TODO: MID_WAY CONVERTING TO GET ATTRIBUTES, CAN I PASS THE IDS INSTEAD FOR SG, and M_NR? WHAT DOES THE TEMPLATE THAT USES IT REQUIRE AS INPUT?
+## TODO: CHANGE BACK TO RESOURCE GROUP AFTER VERIFICATION OF SUCCESS.
+  minions:
+    type: OS::Heat::Stack
+    properties:
+      parameters:
+        m_image:      { get_param: image }
+        m_flavor:     { get_param: flavor }
+        m_keyname:    { get_param: keyname }
+        m_mvs:        { get_param: minion_volume_size }
+        m_nr:         { get_param: network_resource }
+        m_sg:         { get_attr: [server_group, ] }
+        m_fp:         { get_attr: [k8s_master_floating, ip] }
+        m_count:      { get_param: k8s_minion_count }
+      template: | 
+        heat_template_version: 2015-04-30
+        parameters:
+          m_image:    { type: string }
+          m_flavor:   { type: string }
+          m_keyname:  { type: string }
+          m_mvs:      { type: number }
+          m_nr:       { type: string }
+          m_sg:       { type: string }
+          m_fp:       { type: string }
+          m_count:    { type: number }
+        resources:
+          minion_server:
+            type: OS::Nova::Server
+            properties:
+              image:    { get_param: m_image   }
+              flavor:   { get_param: m_flavor  }
+              key_name: { get_param: m_keyname }
+              name: k8s_minion
+              networks: 
+              - network:       { get_resource: m_nr }
+              scheduler_hints: { group: { get_param: m_sg } }
+              metadata: 
+                kube_group: k8sminion,k8scluster,nofloating
+          test_vol:
+            type: OS::Cinder::Volume
+            properties:
+              size: {get_param: m_mvs}
+          minion_vol_attach:
+            type: OS::Cinder::VolumeAttachment
+            properties:
+              instance_uuid: { get_resource: minion_server }
+              volume_id:     { get_resource: minion_vol    }
 
 outputs:
   ssh_key_name:
