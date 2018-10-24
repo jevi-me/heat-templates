@@ -304,10 +304,13 @@ resources:
             }
             enable_services() {
             systemctl enable --now etcd
+            sleep 10
             etcdctl mkdir /kube-centos/network
             etcdctl mk /kube-centos/network/config "{ \"Network\": \"172.30.30.0/12\", \"SubnetLen\": 24, \"Backend\": { \"Type\": \"vxlan\" } }"
             systemctl daemon-reload
+            sleep 5
             systemctl restart etcd
+            sleep 10
             systemctl enable --now kube-apiserver
             cat <<EOF >> /usr/lib/systemd/system/kube-apiserver.service
             [Service]
@@ -316,13 +319,17 @@ resources:
             ExecStartPre=/usr/bin/chown kube.kube /var/run/kubernetes
             EOF
             systemctl daemon-reload
-            systemctl restart kube-apiserver
+            sleep 5
+            systemctl restart etcd kube-apiserver
+            sleep 10
             for service in kube-controller-manager flanneld kube-scheduler docker kube-proxy kubelet; do 
             systemctl enable --now $service
+            sleep 10
             done
             kubectl config set-cluster default-cluster --server=http://k8s-master:8080
             kubectl config set-context default-context --cluster=default-cluster --user=default-admin
             kubectl config use-context default-context
+            sleep 10
             systemctl is-system-running
             for service in etcd kube-apiserver kube-controller-manager flanneld kube-scheduler docker kube-proxy kubelet; do 
             systemctl status -l $service
@@ -448,17 +455,19 @@ resources:
                 enable_services() {
                 for services in kube-proxy kublet flanneld docker; do
                   systemctl enable --now $services
+                  sleep 10
                 done
                 kubectl config set-cluster default-cluster --server=http://k8s-master:8080
                 kubectl config set-context default-context --cluster=default-cluster --user=default-admin
                 kubectl config use-context default-context
+                sleep 10
                 systemctl is-system-running
                 for service in kube-proxy kublet flanneld docker; do
                   systemctl status -l $service
                 done
                 kubectl get nodes
                 }
-                sleep 10
+                sleep 600
                 os_inits
                 sleep 10
                 package_install
