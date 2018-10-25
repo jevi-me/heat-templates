@@ -482,11 +482,11 @@ resources:
                         enable_services() {
                         systemctl daemon-reload
                         sleep 5
-                        for services in kube-proxy kubelet flanneld docker; do
+                        for services in kube-proxy flanneld docker kubelet ; do
                           systemctl enable $services
                           sleep 10
                         done
-                        for services in kube-proxy kubelet flanneld docker; do
+                        for services in kube-proxy flanneld docker kubelet ; do
                           systemctl start $services
                         sleep 10
                         done
@@ -495,7 +495,7 @@ resources:
                         kubectl config use-context default-context
                         sleep 10
                         systemctl is-system-running
-                        for service in kube-proxy kublet flanneld docker; do
+                        for service in kube-proxy kubelet flanneld docker; do
                           systemctl status -l $service
                         done
                         kubectl get nodes
