@@ -358,8 +358,6 @@ resources:
             kube_checks
             sleep 10
             create_services
-            sleep 600
-            kubectl get nodes
           params:
             "%ostack_auth_url%": { get_param: ostack_auth_url }
             "%ostack_tenant%":   { get_param: ostack_tenant   }
@@ -462,7 +460,7 @@ resources:
                         EOF
                         cat <<EOF > /etc/sysconfig/flanneld
                         # etcd url location.  Point this to the server where etcd runs
-                        FLANNEL_ETCD="http://k8s-master:4001"
+                        FLANNEL_ETCD="http://k8s-master:2379"
                         # etcd config key.  This is the configuration key that flannel queries
                         # For address range assignment
                         FLANNEL_ETCD_KEY="/kube-centos/network"
@@ -481,7 +479,7 @@ resources:
                         }
                         enable_services() {
                         systemctl daemon-reload
-                        sleep 5
+                        sleep 10
                         for services in kube-proxy flanneld docker kubelet ; do
                           systemctl enable $services
                           sleep 10
@@ -500,7 +498,8 @@ resources:
                         done
                         kubectl get nodes
                         }
-                        sleep 600
+                        #TODO: Avoid using sleep as a timing method and implement a form of wait/triggering with the template to kick off flannel.
+                        sleep 660
                         os_inits
                         sleep 10
                         package_install
