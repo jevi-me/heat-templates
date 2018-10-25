@@ -29,7 +29,7 @@ parameter_groups:
 parameters:
 
   ostack_auth_url:
-    description: Obtain from Compute > Access & Security > API Access
+    description: Obtain from Compute > Access & Security > API Access > Download Openstack RC
     label: Openstack Auth URL
     type: string
     default: https://west.cloud.computecanada.ca:5000/v2.0
@@ -48,13 +48,13 @@ parameters:
     hidden: false
 
   ostack_password: 
-    description: Reenter password.
+    description: Reenter your password.
     label: Reenter Password
     type: string
     hidden: true
 
   flavor:
-    description: Flavor used for all instances
+    description: Flavor used for all instances. Ideally at least 2 RAM and 6 GB.
     label: Flavor
     type: string
     default: 083093b3-ffc1-464e-a453-cefce795021b
@@ -64,7 +64,7 @@ parameters:
     description: Valid flavors only
 
   image:
-    description: Image that will be used for the nodes.
+    description: Image that will be used for the nodes. This script works with CentOs 7 2017-02
     label: Image
     type: string
     default: 83867183-2096-4d41-945b-953a5876b575
@@ -74,7 +74,7 @@ parameters:
     description: Must be a valid Glance image
 
   k8s_minion_count:
-    description: Number of machines to deploy as a Kubernetes Minion
+    description: Number of machines to deploy as a Kubernetes Minion.
     label: Kubernetes Minion Count
     type: number
     default: 2
@@ -86,14 +86,14 @@ parameters:
       description: Must be between 2 and 4 machines (Current Project Limit)
 
   ext_network:
-    description: See Routers tab for name of the External Network
+    description: See Routers tab for name of the External Network.
     type: string
     label: External Network
     default: VLAN3337
     hidden: false
 
   keyname:
-    description: Name of keypair to be used for instance
+    description: Name of keypair to be used for instance. Create your own before deployment.
     label: Key Pair
     type: string
     default: dtnode_key
@@ -137,8 +137,6 @@ resources:
 
   k8s_master_floating_association:
     type: OS::Nova::FloatingIPAssociation
-    depends_on:
-      - k8s_master
     properties:
       floating_ip: {get_resource: k8s_master_floating}
       server_id: {get_resource: k8s_master}
