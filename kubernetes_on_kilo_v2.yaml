@@ -125,6 +125,7 @@ parameters:
     description: Must be between 4 and 20
 
 resources:
+
   ########################################
   ##  Policies and IPs
   ########################################
@@ -181,6 +182,7 @@ resources:
   ########################################
   ##  Servers and Volumes
   ########################################
+
   k8s_master:
     type: OS::Nova::Server
     properties:
@@ -200,8 +202,10 @@ resources:
         str_replace:
           template: |
             #!/bin/bash
+            sudo su -
             os_inits() {
             systemctl disable firewalld
+            setenforce 0
             sed -i 's/SELINUX=.*/SELINUX=disabled/' /etc/selinux/config
             yum remove chrony -y -q
             yum install ntp -y -q
@@ -334,8 +338,8 @@ resources:
             systemctl --state=failed
             }
             create_services() {
-            kubectl create -f https://raw.githubusercontent.com/kubernetes/dashboard/master/src/deploy/recommended/kubernetes-dashboard.yaml
-            kubectl create -f https://raw.githubusercontent.com/giantswarm/kubernetes-prometheus/master/manifests-all.yaml
+            #kubectl create -f https://raw.githubusercontent.com/kubernetes/dashboard/master/src/deploy/recommended/kubernetes-dashboard.yaml
+            #kubectl create -f https://raw.githubusercontent.com/giantswarm/kubernetes-prometheus/master/manifests-all.yaml
             kubectl get all --all-namespaces=true
             }
             sleep 10
@@ -371,7 +375,6 @@ resources:
     properties:
       instance_uuid: {get_resource: k8s_master}
       volume_id: {get_resource: k8s_master_vol}
-
 
   k8s_minions:
     type: OS::Heat::ResourceGroup
@@ -409,8 +412,10 @@ resources:
                     str_replace:
                       template: |
                         #!/bin/sh
+                        sudo su -
                         os_inits() {
                         systemctl disable firewalld
+                        setenforce 0
                         sed -i 's/SELINUX=.*/SELINUX=disabled/' /etc/selinux/config
                         yum remove chrony -y -q
                         yum install ntp -y -q
@@ -473,9 +478,15 @@ resources:
                         sed -i 's/OPTIONS=.*/OPTIONS=\"--selinux-enabled=false --log-driver=journald --signature-verification=false\"/' /etc/sysconfig/docker
                         }
                         enable_services() {
-                        for services in kube-proxy kublet flanneld docker; do
-                          systemctl enable --now $services
+                        systemctl daemon-reload
+                        sleep 5
+                        for services in kube-proxy kubelet flanneld docker; do
+                          systemctl enable $services
                           sleep 10
+                        done
+                        for services in kube-proxy kubelet flanneld docker; do
+                          systemctl start $services
+                        sleep 10
                         done
                         kubectl config set-cluster default-cluster --server=http://k8s-master:8080
                         kubectl config set-context default-context --cluster=default-cluster --user=default-admin
@@ -528,4 +539,4 @@ outputs:
   features_lists:
     description: > 
       List of features enabled:
-    value: "- Prometheus, Grafana,Flannel"
+    value: "- Prometheus, Grafana, Flannel"
