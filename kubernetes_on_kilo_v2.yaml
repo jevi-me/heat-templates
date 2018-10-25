@@ -378,8 +378,6 @@ resources:
       instance_uuid: {get_resource: k8s_master}
       volume_id: {get_resource: master_vol}
 
-
-## TODO: MID_WAY CONVERTING TO GET ATTRIBUTES, CAN I PASS THE IDS INSTEAD FOR SG, and M_NR? WHAT DOES THE TEMPLATE THAT USES IT REQUIRE AS INPUT?
 ## TODO: CHANGE BACK TO RESOURCE GROUP AFTER VERIFICATION OF SUCCESS.
   minions:
     type: OS::Heat::Stack
@@ -389,9 +387,7 @@ resources:
         m_flavor:     { get_param: flavor }
         m_keyname:    { get_param: keyname }
         m_mvs:        { get_param: minion_volume_size }
-        m_nr:         { get_param: network_resource }
-        m_sg:         { get_attr: [server_group, ] }
-        m_fp:         { get_attr: [k8s_master_floating, ip] }
+        m_ip:         { get_attr: [k8s_master, first_address] }
         m_count:      { get_param: k8s_minion_count }
       template: | 
         heat_template_version: 2015-04-30
@@ -400,9 +396,7 @@ resources:
           m_flavor:   { type: string }
           m_keyname:  { type: string }
           m_mvs:      { type: number }
-          m_nr:       { type: string }
-          m_sg:       { type: string }
-          m_fp:       { type: string }
+          m_ip:       { type: string }
           m_count:    { type: number }
         resources:
           minion_server:
@@ -412,15 +406,12 @@ resources:
               flavor:   { get_param: m_flavor  }
               key_name: { get_param: m_keyname }
               name: k8s_minion
-              networks: 
-              - network:       { get_resource: m_nr }
-              scheduler_hints: { group: { get_param: m_sg } }
               metadata: 
                 kube_group: k8sminion,k8scluster,nofloating
-          test_vol:
+          minion_vol:
             type: OS::Cinder::Volume
             properties:
-              size: {get_param: m_mvs}
+              size: { get_param: m_mvs}  
           minion_vol_attach:
             type: OS::Cinder::VolumeAttachment
             properties:
