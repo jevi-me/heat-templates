@@ -623,6 +623,13 @@ resources:
                         yum install ntp -y -q
                         systemctl enable ntpd.service
                         systemctl start ntpd.service
+                        nodeip=$(ip addr show eth0 | awk '$1 == "inet" {print $2}' | cut -f1 -d/)
+                        cat <<EOF >> /etc/hosts
+                        $nodeip    k8s-node-%index%.westcloud
+                        $nodeip    k8s-node-%index%
+                        %masterip%  k8s-master.westcloud
+                        %masterip%  k8s-master
+                        EOF
                         firewall-cmd --permanent --add-port=10250/tcp
                         firewall-cmd --permanent --add-port=10255/tcp
                         firewall-cmd --permanent --add-port=30000-32767/tcp
