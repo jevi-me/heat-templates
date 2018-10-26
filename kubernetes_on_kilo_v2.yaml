@@ -467,7 +467,7 @@ resources:
             "%ostack_username%": { get_param: ostack_username    }
             "%ostack_password%": { get_param: ostack_password    }
             "%use_kubeadm%":     { get_param: use_kubeadm        }
-            "%custom_script_file%":     { get_param: custom_script_file }
+            "%custom_script_file%":  { get_param: custom_script_file }
 
   k8s_master_vol:
     type: OS::Cinder::Volume
@@ -503,15 +503,14 @@ resources:
               keyname:  { type: string }
               minion_volume_size: { type: number }
               masterip: { type: string }
+              use_kubeadm: { type: string }
             resources:
               k8s_minion:
                 type: OS::Nova::Server
                 properties:
                   image:    { get_param: image   }
                   flavor:   { get_param: flavor  }
-                  keyname:  { get_param: keyname }
-                  minion_volume_size: { type: number }
-                  masterip: { type: string }
+                  key_name:  { get_param: keyname }
                   name: k8s_minion_%index%
                   metadata: 
                     kube_group: k8sminion,k8scluster,nofloating
