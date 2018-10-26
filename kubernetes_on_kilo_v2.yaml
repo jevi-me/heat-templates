@@ -5,7 +5,7 @@ description: '''
   OpenStack Powered Cloud using Centos 2017-02'''
 
 parameter_groups:
-- label: credentials
+- label: credentials_and_kubeadm
   description: Parameters
   parameters: 
   - ostack_password
@@ -15,6 +15,8 @@ parameter_groups:
 - label: node_details
   description: Node customisation
   parameters:
+  - use_kubeadm
+  - custom_script_file
   - image
   - flavor
   - k8s_minion_count
@@ -64,7 +66,7 @@ parameters:
     description: Valid flavors only
 
   image:
-    description: Image that will be used for the nodes. This script works with CentOs 7 2017-02
+    description: Image that will be used for the nodes. This script works with CentOS 7 2017-02
     label: Image
     type: string
     default: 83867183-2096-4d41-945b-953a5876b575
@@ -123,6 +125,20 @@ parameters:
         min: 4
         max: 20
     description: Must be between 4 and 20
+  
+  use_kubeadm:
+    description: Choice between using CentOS Repo's Kubernetes (older) or kubeadm to bootstrap the latest version of Kubernetes
+    label: Use Kubeadm
+    type: boolean
+    hidden: false
+    default: false
+
+  custom_script_file:
+    description: Add the link to a custom script to be run on start up.
+    label: Link to your custom post-start .sh script file
+    default: None
+    type: string
+    hidden: false
 
 resources:
 
@@ -205,6 +221,9 @@ resources:
             systemctl disable firewalld
             setenforce 0
             sed -i --follow-symlinks 's/SELINUX=.*/SELINUX=disabled/g' /etc/selinux/config
+            hostnamectl set-hostname 'k8s-master'
+            modprobe br_netfilter
+            echo '1' > /proc/sys/net/bridge/bridge-nf-call-iptables
             yum install deltarpm -y -q
             yum update -y -q
             yum remove chrony -y -q
@@ -213,13 +232,6 @@ resources:
             systemctl start ntpd.service
             }
             package_install() {
-            # if not yum-updating, use the commented packages
-            #yum install https://cbs.centos.org/repos/virt7-docker-common-release/x86_64/os/Packages/kubernetes-client-1.1.0-0.4.git2bfa9a1.el7.x86_64.rpm -y -q
-            #yum install https://cbs.centos.org/repos/virt7-docker-common-release/x86_64/os/Packages/kubernetes-master-1.1.0-0.4.git2bfa9a1.el7.x86_64.rpm -y -q
-            #yum install https://cbs.centos.org/repos/virt7-docker-common-release/x86_64/os/Packages/kubernetes-node-1.1.0-0.4.git2bfa9a1.el7.x86_64.rpm -y -q 
-            #yum install https://cbs.centos.org/repos/virt7-docker-common-release/x86_64/os/Packages/kubernetes-1.1.0-0.4.git2bfa9a1.el7.x86_64.rpm -y -q
-            #yum install https://cbs.centos.org/repos/virt7-docker-common-release/x86_64/os/Packages/etcd-2.0.9-1.el7.x86_64.rpm -y -q
-            #yum install https://cbs.centos.org/repos/virt7-docker-common-release/x86_64/os/Packages/flannel-0.2.0-7.el7.x86_64.rpm -y -q
             yum install kubernetes-client -y -q
             yum install kubernetes-master -y -q
             yum install kubernetes-node -y -q
@@ -344,32 +356,118 @@ resources:
             kubectl get nodes
             systemctl --state=failed
             }
-            create_services() {
-            kubectl apply -f https://raw.githubusercontent.com/kubernetes/dashboard/master/src/deploy/recommended/kubernetes-dashboard.yaml
-            kubectl apply -f https://raw.githubusercontent.com/giantswarm/kubernetes-prometheus/master/manifests-all.yaml
-            kubectl get all --all-namespaces=true
+            validate_and_run_csf(){
+            regex='^(https?|ftp|file)://[-A-Za-z0-9\+&@#/%?=~_|!:,.;]*[-A-Za-z0-9\+&@#/%=~_|]$.sh'
+            script_file=%custom_script_file%
+            if [[ $script_file =~ $regex ]]; then
+            echo "Valid custom Script provided."
+            curl $script_file -o custom_script.sh
+            . custom_script.sh
+            elif [[ $script_file == "None" ]]; then
+            echo "No custom script post-start provided."
+            else
+            echo "Custom Post-Script Script link not a valid .sh file: $script_file"
+            fi
             }
-            sleep 10
-            os_inits
-            sleep 10
-            package_install
-            sleep 10
-            config_host
-            sleep 10
-            backup_files
-            sleep 10
-            config_files
-            sleep 10
-            enable_services
-            sleep 10
-            kube_checks
-            sleep 10
-            create_services
+            kubeadm_script(){
+            hostnamectl set-hostname 'k8s-master'
+            setenforce 0
+            sed -i --follow-symlinks 's/SELINUX=.*/SELINUX=disabled/g' /etc/sysconfig/selinux
+            modprobe br_netfilter
+            masterip=$(ip addr show eth0 | awk '$1 == "inet" {print $2}' | cut -f1 -d/)
+            cat <<EOF >> /etc/hosts
+            $masterip    k8s-master.westcloud
+            $masterip    k8s-master
+            EOF
+            yum -y install firewalld
+            systemctl start firewalld.service
+            systemctl enable firewalld.service
+            firewall-cmd --permanent --zone=public --add-service=ssh
+            firewall-cmd --permanent --zone=public --add-service=nfs
+            firewall-cmd --permanent --add-port=6443/tcp
+            firewall-cmd --permanent --add-port=2379-2380/tcp
+            firewall-cmd --permanent --add-port=10250/tcp
+            firewall-cmd --permanent --add-port=10251/tcp
+            firewall-cmd --permanent --add-port=10252/tcp
+            firewall-cmd --permanent --add-port=10255/tcp
+            firewall-cmd --reload
+            cat <<EOF > /etc/yum.repos.d/kubernetes.repo
+            [kubernetes]
+            name=Kubernetes
+            baseurl=https://packages.cloud.google.com/yum/repos/kubernetes-el7-x86_64
+            enabled=1
+            gpgcheck=1
+            repo_gpgcheck=1
+            gpgkey=https://packages.cloud.google.com/yum/doc/yum-key.gpg
+                    https://packages.cloud.google.com/yum/doc/rpm-package-key.gpg
+            EOF
+            yum repolist -y
+            yum install kubeadm docker -y -q
+            echo '1' > /proc/sys/net/bridge/bridge-nf-call-iptables
+            echo '1' > /proc/sys/net/ipv4/ip_forward
+            cat <<EOF >  /etc/sysctl.d/k8s.conf
+            net.bridge.bridge-nf-call-ip6tables = 1
+            net.bridge.bridge-nf-call-iptables = 1
+            EOF
+            sysctl --system
+            sed -i 's/OPTIONS=.*/OPTIONS=\"--selinux-enabled=false --log-driver=journald --signature-verification=false\"/' /etc/sysconfig/docker
+            systemctl daemon-reload
+            systemctl restart docker && systemctl enable docker
+            systemctl enable kubelet
+            kubeadm init
+            systemctl daemon-reload
+            systemctl restart docker kubelet
+            mkdir -p $HOME/.kube
+            sudo cp -i /etc/kubernetes/admin.conf $HOME/.kube/config
+            sudo swapoff -a
+            sudo chown $(id -u):$(id -g) $HOME/.kube/config
+            sudo su centos
+            mkdir -p $HOME/.kube
+            sudo cp -i /etc/kubernetes/admin.conf $HOME/.kube/config
+            sudo swapoff -a
+            sudo chown $(id -u):$(id -g) $HOME/.kube/config
+            sudo su root
+            export kubever=$(kubectl version | base64 | tr -d '\n')
+            kubectl apply -f "https://cloud.weave.works/k8s/net?k8s-version=$kubever"
+            kubectl get nodes
+            yum -y install nfs-utils
+            systemctl enable nfs-server.service
+            systemctl start nfs-server.service
+            mkdir /var/nfs
+            kubeadm token create --print-join-command > /var/nfs/kubeadm-join.bash
+            chown nfsnobody:nfsnobody /var/nfs
+            chmod 755 /var/nfs
+            exportfs -a
+            }
+            with_kubeadm() {
+            kubeadm_script
+            sleep 120
+            validate_and_run_csf
+            }
+            without_kubeadm() {
+            sleep 10; os_inits
+            sleep 10; package_install
+            sleep 10; config_host
+            sleep 10; backup_files
+            sleep 10; config_files
+            sleep 10; enable_services
+            sleep 10; kube_checks
+            sleep 10; validate_and_run_csf
+            }
+            echo "USE KUBEADM PARAMETER SET TO:" %use_kubeadm%.
+            use_kubeadm=%use_kubeadm%
+            if [[ $use_kubeadm == "True" ]]; then
+            with_kubeadm
+            else
+            without_kubeadm
+            fi
           params:
-            "%ostack_auth_url%": { get_param: ostack_auth_url }
-            "%ostack_tenant%":   { get_param: ostack_tenant   }
-            "%ostack_username%": { get_param: ostack_username }
-            "%ostack_password%": { get_param: ostack_password }
+            "%ostack_auth_url%": { get_param: ostack_auth_url    }
+            "%ostack_tenant%":   { get_param: ostack_tenant      }
+            "%ostack_username%": { get_param: ostack_username    }
+            "%ostack_password%": { get_param: ostack_password    }
+            "%use_kubeadm%":     { get_param: use_kubeadm        }
+            "%custom_script_file%":     { get_param: custom_script_file }
 
   k8s_master_vol:
     type: OS::Cinder::Volume
@@ -391,26 +489,29 @@ resources:
         type: OS::Heat::Stack
         properties:
           parameters:
-            m_image:      { get_param: image }
-            m_flavor:     { get_param: flavor }
-            m_keyname:    { get_param: keyname }
-            m_mvs:        { get_param: minion_volume_size }
-            m_ip:         { get_attr: [k8s_master, first_address] }
+            image:       { get_param: image   }
+            flavor:      { get_param: flavor  }
+            keyname:     { get_param: keyname }
+            minion_volume_size:   { get_param: minion_volume_size }
+            masterip:    { get_attr: [k8s_master, first_address] }
+            use_kubeadm: { get_param: use_kubeadm }
           template: | 
             heat_template_version: 2015-04-30
             parameters:
-              m_image:    { type: string }
-              m_flavor:   { type: string }
-              m_keyname:  { type: string }
-              m_mvs:      { type: number }
-              m_ip:       { type: string }
+              image:    { type: string }
+              flavor:   { type: string }
+              keyname:  { type: string }
+              minion_volume_size: { type: number }
+              masterip: { type: string }
             resources:
               k8s_minion:
                 type: OS::Nova::Server
                 properties:
-                  image:    { get_param: m_image   }
-                  flavor:   { get_param: m_flavor  }
-                  key_name: { get_param: m_keyname }
+                  image:    { get_param: image   }
+                  flavor:   { get_param: flavor  }
+                  keyname:  { get_param: keyname }
+                  minion_volume_size: { type: number }
+                  masterip: { type: string }
                   name: k8s_minion_%index%
                   metadata: 
                     kube_group: k8sminion,k8scluster,nofloating
@@ -424,6 +525,8 @@ resources:
                         systemctl disable firewalld
                         setenforce 0
                         sed -i --follow-symlinks 's/SELINUX=.*/SELINUX=disabled/g' /etc/selinux/config
+                        modprobe br_netfilter
+                        echo '1' > /proc/sys/net/bridge/bridge-nf-call-iptables
                         yum install deltarpm -y -q
                         yum update -y -q
                         yum remove chrony -y -q
@@ -432,13 +535,6 @@ resources:
                         systemctl start ntpd.service
                         }
                         package_install() {
-                        # if not yum-updating, use the commented packages
-                        #yum install https://cbs.centos.org/repos/virt7-docker-common-release/x86_64/os/Packages/kubernetes-client-1.1.0-0.4.git2bfa9a1.el7.x86_64.rpm -y -q
-                        #yum install https://cbs.centos.org/repos/virt7-docker-common-release/x86_64/os/Packages/kubernetes-master-1.1.0-0.4.git2bfa9a1.el7.x86_64.rpm -y -q
-                        #yum install https://cbs.centos.org/repos/virt7-docker-common-release/x86_64/os/Packages/kubernetes-node-1.1.0-0.4.git2bfa9a1.el7.x86_64.rpm -y -q 
-                        #yum install https://cbs.centos.org/repos/virt7-docker-common-release/x86_64/os/Packages/kubernetes-1.1.0-0.4.git2bfa9a1.el7.x86_64.rpm -y -q
-                        #yum install https://cbs.centos.org/repos/virt7-docker-common-release/x86_64/os/Packages/etcd-2.0.9-1.el7.x86_64.rpm -y -q
-                        #yum install https://cbs.centos.org/repos/virt7-docker-common-release/x86_64/os/Packages/flannel-0.2.0-7.el7.x86_64.rpm -y -q
                         yum install kubernetes-client -y -q
                         yum install kubernetes-master -y -q
                         yum install kubernetes-node -y -q
@@ -514,31 +610,40 @@ resources:
                         done
                         kubectl get nodes
                         }
-                        #TODO: Avoid using sleep as a timing method and implement a form of wait/triggering with the template to kick off flannel.
-                        sleep 660
-                        os_inits
-                        sleep 10
-                        package_install
-                        sleep 10
-                        config_host
-                        sleep 10
-                        backup_files
-                        sleep 10
-                        config_files
-                        sleep 10
-                        enable_services
+                        kubeadm_script(){
+                        echo "Kubeadm under construction."
+                        }
+                        with_kubeadm() {
+                        kubeadm_script
+                        }
+                        without_kubeadm() {
+                        sleep 660; os_inits
+                        sleep 10; package_install
+                        sleep 10; config_host
+                        sleep 10; backup_files
+                        sleep 10; config_files
+                        sleep 10; enable_services
+                        }
+                        echo "USE KUBEADM PARAMETER SET TO:" %use_kubeadm%.
+                        use_kubeadm=%use_kubeadm%
+                        if [[ $use_kubeadm == "True" ]]; then
+                        with_kubeadm
+                        else
+                        without_kubeadm
+                        fi
                       params: 
-                        "%masterip%": {get_param: m_ip}
+                        "%masterip%":     { get_param: masterip    }
+                        "%use_kubeadm%":  { get_param: use_kubeadm }
               k8s_minion_vol:
                 type: OS::Cinder::Volume
                 properties:
-                  size: { get_param: m_mvs}
+                  size: { get_param: minion_volume_size}
                   name: k8s_minion_vol_%index%
               k8s_minion_vol_attach:
                 type: OS::Cinder::VolumeAttachment
                 properties:
-                  instance_uuid: { get_resource: k8s_minion }
-                  volume_id:     { get_resource: k8s_minion_vol    }
+                  instance_uuid: { get_resource: k8s_minion     }
+                  volume_id:     { get_resource: k8s_minion_vol }
 
 outputs:
   ssh_key_name:
@@ -556,4 +661,4 @@ outputs:
   features_lists:
     description: > 
       List of features enabled:
-    value: "- Prometheus, Grafana, Flannel"
+    value: "If Kubeadm is used: Weave, Grafana, Prometheus. If Kubeadm is not used: Flannel. See option selected in Parameters section above."
