@@ -612,6 +612,15 @@ resources:
                         }
                         kubeadm_script(){
                         echo "Kubeadm under construction."
+                        yum -y install nfs-utils
+                        systemctl enable nfs-server.service
+                        systemctl start nfs-server.service
+                        mkdir -p /mnt/nfs/home
+                        mkdir -p /mnt/nfs/var/nfs
+                        mount k8s-master:/home /mnt/nfs/home
+                        mount k8s-master:/var/nfs /mnt/nfs/var/nfs
+                        ls -al /mnt/nfs/home
+                        ls -al /mnt/nfs/var/nfs
                         }
                         with_kubeadm() {
                         kubeadm_script
