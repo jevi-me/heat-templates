@@ -173,10 +173,10 @@ resources:
          - remote_ip_prefix: 0.0.0.0/0
            protocol: icmp
 
- master_wait_handle:
+  master_wait_handle:
    type: OS::Heat::WaitConditionHandle
 
- master_wait_condition:
+  master_wait_condition:
    type: OS::Heat::WaitCondition
    properties:
      handle: { get_resource: master_wait_handle }
@@ -459,6 +459,8 @@ resources:
 
   k8s_minion_group:
     type: OS::Heat::ResourceGroup
+    depends_on:
+      - k8s_master
     properties:
       count: { get_param: k8s_minion_count }
       resource_def: 
@@ -685,13 +687,13 @@ outputs:
       Public ip address of the Kubernetes master server.
     value: {get_attr: [k8s_master_floating, ip]}
 
-  start_up_instructions:
-    description: > 
-      Replace <ssh_key_name> and <k8s_masterip> with the variables in outputs.
-      Perform the following commands:
-        ssh -i .ssh/<ssh_key_name>.pem centos@<k8s_masterip>
-        mkdir -p $HOME/.kube
-        sudo cp -i /etc/kubernetes/admin.conf $HOME/.kube/config
-        sudo chown $(id -u):$(id -g) $HOME/.kube/config
-        kubectl apply -f "https://cloud.weave.works/k8s/net?k8s-version=$(kubectl version | base64 | tr -d '\n')"
-    value: {get_attr: [master_wait_handle, show]}
+  log_in_instructions:
+    description: >
+      To log into the cluster: ssh -i .ssh/<ssh_key_name>.pem centos@<k8s_masterip>. You can attempt log in when it shows ACTIVE below.
+    value: {get_attr: [k8s_master, show, status]}
+
+  kubeadm_start_up_instructions:
+    description: >
+      IF USING KUBEADM OPTION, perform the following commands to start up cluster:
+    value: "mkdir -p $HOME/.kube; sudo cp -i /etc/kubernetes/admin.conf $HOME/.kube/config; sudo chown $(id -u):$(id -g) $HOME/.kube/config; kubectl apply -f 'https://cloud.weave.works/k8s/net?k8s-version=$(kubectl version | base64 | tr -d '\\n')';"
+
