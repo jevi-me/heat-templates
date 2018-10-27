@@ -223,6 +223,8 @@ resources:
             sed -i --follow-symlinks 's/SELINUX=.*/SELINUX=disabled/g' /etc/selinux/config
             modprobe br_netfilter
             echo '1' > /proc/sys/net/bridge/bridge-nf-call-iptables
+            echo '1' > /proc/sys/net/ipv4/ip_forward
+            sysctl --system
             yum install deltarpm -y -q
             yum update -y -q
             yum remove chrony -y -q
@@ -237,12 +239,33 @@ resources:
             yum install kubernetes -y -q
             yum install etcd -y -q
             yum install flannel -y -q
+            yum install git -y -q
+            }
+            package_install_ka(){
+            cat <<EOF > /etc/yum.repos.d/kubernetes.repo
+            [kubernetes]
+            name=Kubernetes
+            baseurl=https://packages.cloud.google.com/yum/repos/kubernetes-el7-x86_64
+            enabled=1
+            gpgcheck=1
+            repo_gpgcheck=1
+            gpgkey=https://packages.cloud.google.com/yum/doc/yum-key.gpg
+                    https://packages.cloud.google.com/yum/doc/rpm-package-key.gpg
+            EOF
+            yum repolist -y
+            yum install kubeadm -y -q
+            yum install docker -y -q
+            yum install git -y -q
+            yum install flannel -y -q
+            yum install nfs-utils -y -q
             }
             config_host() {
             masterip=$(ip addr show eth0 | awk '$1 == "inet" {print $2}' | cut -f1 -d/)
             cat <<EOF >> /etc/hosts
             $masterip    k8s-master.westcloud
             $masterip    k8s-master
+            $masterip    k8s_master
+            $masterip    k8s_master.novalocal
             EOF
             }
             backup_files() {
@@ -318,6 +341,14 @@ resources:
             sed -i 's/KUBE_CONTROLLER_MANAGER_ARGS=.*/KUBE_CONTROLLER_MANAGER_ARGS=\"--cloud-provider=openstack --cloud-config=\/etc\/kubernetes\/cloud.conf\"/' /etc/kubernetes/controller-manager
             sed -i 's/OPTIONS=.*/OPTIONS=\"--selinux-enabled=false --log-driver=journald --signature-verification=false\"/' /etc/sysconfig/docker
             }
+            config_files_ka(){
+            cat <<EOF >  /etc/sysctl.d/k8s.conf
+            net.bridge.bridge-nf-call-ip6tables= 1
+            net.bridge.bridge-nf-call-iptables= 1
+            EOF
+            sysctl --system
+            sed -i 's/OPTIONS=.*/OPTIONS=\"--selinux-enabled=false --log-driver=journald --signature-verification=false\"/' /etc/sysconfig/docker
+            }
             enable_services() {
             systemctl enable --now etcd
             sleep 10
@@ -351,6 +382,39 @@ resources:
             systemctl status -l $service
             done
             }
+            enable_services_ka_1(){
+            systemctl daemon-reload; sleep 5
+            systemctl enable docker kubelet; sleep 10
+            systemctl restart docker kubelet; sleep 10
+            kubeadm init --pod-network-cidr=10.244.0.0/16; sleep 300
+            }
+            enable_services_ka_2(){
+            whoami
+            mkdir -p $HOME/.kube; sleep 10
+            sudo cp /etc/kubernetes/admin.conf $HOME/.kube/config
+            sudo swapoff -a
+            sudo chown $(id -u):$(id -g) $HOME/.kube/config
+            chmod 777 $HOME/.kube/config
+            systemctl daemon-reload; sleep 5
+            systemctl restart docker kubelet; sleep 5
+            systemctl status docker kubelet -l
+            kubectl apply -f https://raw.githubusercontent.com/coreos/flannel/bc79dd1505b0c8681ece4de4c0d86c5cd2643275/Documentation/kube-flannel.yml
+            systemctl daemon-reload; sleep 5
+            systemctl enable flanneld
+            systemctl restart docker kubelet flanneld; sleep 5
+            }
+            enable_services_ka_3(){
+            mkdir /var/nfs
+            kubeadm token create --print-join-command > /var/nfs/kubeadm-join.bash
+            chown nfsnobody:nfsnobody /var/nfs; chown nfsnobody:nfsnobody /var/nfs/*
+            chmod 777 /var/nfs; chmod 777 /var/nfs/*
+            systemctl enable nfs-server.service
+            cat <<EOF > /etc/exports
+            /var/nfs *(rw,no_root_squash,no_subtree_check)
+            EOF
+            exportfs -a
+            systemctl start nfs-server.service
+            }
             kube_checks() {
             kubectl get nodes
             systemctl --state=failed
@@ -368,81 +432,16 @@ resources:
             echo "Custom Post-Script Script link not a valid .sh file: $script_file"
             fi
             }
-            kubeadm_script(){
-            setenforce 0
-            sed -i --follow-symlinks 's/SELINUX=.*/SELINUX=disabled/g' /etc/sysconfig/selinux
-            modprobe br_netfilter
-            masterip=$(ip addr show eth0 | awk '$1 == "inet" {print $2}' | cut -f1 -d/)
-            cat <<EOF >> /etc/hosts
-            $masterip    k8s-master.westcloud
-            $masterip    k8s-master
-            $masterip    k8s_master
-            $masterip    k8s_master.novalocal
-            EOF
-            systemctl disable firewalld
-            cat <<EOF > /etc/yum.repos.d/kubernetes.repo
-            [kubernetes]
-            name=Kubernetes
-            baseurl=https://packages.cloud.google.com/yum/repos/kubernetes-el7-x86_64
-            enabled=1
-            gpgcheck=1
-            repo_gpgcheck=1
-            gpgkey=https://packages.cloud.google.com/yum/doc/yum-key.gpg
-                    https://packages.cloud.google.com/yum/doc/rpm-package-key.gpg
-            EOF
-            yum repolist -y
-            yum install kubeadm docker -y -q
-            echo '1' > /proc/sys/net/bridge/bridge-nf-call-iptables
-            echo '1' > /proc/sys/net/ipv4/ip_forward
-            cat <<EOF >  /etc/sysctl.d/k8s.conf
-            net.bridge.bridge-nf-call-ip6tables= 1
-            net.bridge.bridge-nf-call-iptables= 1
-            EOF
-            sleep 5
-            sysctl --system
-            sed -i 's/OPTIONS=.*/OPTIONS=\"--selinux-enabled=false --log-driver=journald --signature-verification=false\"/' /etc/sysconfig/docker
-            systemctl daemon-reload
-            sleep 5
-            systemctl restart docker && systemctl enable docker
-            systemctl enable kubelet
-            sleep 10
-            kubeadm init --pod-network-cidr=10.244.0.0/16
-            sleep 300
-            kubectl get nodes
-            systemctl status docker -l
-            mkdir -p $HOME/.kube
-            sleep 60
-            sudo cp -i /etc/kubernetes/admin.conf $HOME/.kube/config
-            sudo swapoff -a
-            sudo chown $(id -u):$(id -g) $HOME/.kube/config
-            sudo su centos
-            mkdir -p $HOME/.kube
-            sudo cp -i /etc/kubernetes/admin.conf $HOME/.kube/config
-            sudo swapoff -a
-            sudo chown $(id -u):$(id -g) $HOME/.kube/config
-            sudo su -
-            systemctl daemon-reload
-            systemctl restart docker kubelet
-            systemctl docker kubelet -l
-            kubectl get nodes
-            sleep 120
-            export kubever=$(kubectl version | base64 | tr -d '\n')
-            kubectl apply -f https://raw.githubusercontent.com/coreos/flannel/bc79dd1505b0c8681ece4de4c0d86c5cd2643275/Documentation/kube-flannel.yml
-            kubectl get nodes
-            kubectl get all --all-namespaces=true
-            yum -y install nfs-utils
-            systemctl enable nfs-server.service
-            systemctl start nfs-server.service
-            mkdir /var/nfs
-            kubeadm token create --print-join-command > /var/nfs/kubeadm-join.bash
-            chown nfsnobody:nfsnobody /var/nfs
-            chmod 755 /var/nfs
-            exportfs -a
-            }
             with_kubeadm() {
-            kubeadm_script
-            sleep 120
-            validate_and_run_csf
+            sleep 10; os_inits()
+            sleep 10; package_install_ka
+            sleep 10; config_host
+            sleep 10; config_files_ka
+            sleep 10; enable_services_ka_1
+            sleep 10; enable_services_ka_2
+            sleep 10; enable_services_ka_3
+            sleep 10; kube_checks
+            sleep 10; validate_and_run_csf            
             }
             without_kubeadm() {
             sleep 10; os_inits
@@ -659,11 +658,8 @@ resources:
                         systemctl enable nfs-server.service
                         systemctl start nfs-server.service
                         sleep 300
-                        mkdir -p /mnt/nfs/home
                         mkdir -p /mnt/nfs/var/nfs
-                        mount k8s-master:/home /mnt/nfs/home
                         mount k8s-master:/var/nfs /mnt/nfs/var/nfs
-                        ls -al /mnt/nfs/home
                         ls -al /mnt/nfs/var/nfs
                         . /var/nfs/kubeadm-join.bash
                         systemctl daemon-reload
