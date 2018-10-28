@@ -1,0 +1,53 @@
+apiVersion: extensions/v1beta1
+kind: Deployment
+metadata:
+  annotations:
+    kompose.cmd: kompose convert -f /Users/imac/Desktop/untitled folder/docker-compose.yml
+    kompose.version: 1.16.0 ()
+  creationTimestamp: null
+  labels:
+    io.kompose.service: task-mgmt
+  name: task-mgmt
+spec:
+  replicas: 1
+  strategy: {}
+  template:
+    metadata:
+      creationTimestamp: null
+      labels:
+        io.kompose.service: task-mgmt
+    spec:
+      containers:
+      - env:
+        - name: AMQP_URL
+          value: amqp://guest:guest@rabbitmq:5672/
+        - name: EMAIL_NOTIFICATION_RECIPIENTS
+          value: brendan@qri.io
+        - name: GITHUB_LOGIN_URL
+          value: http://localhost:3100/oauth/github
+        - name: GOLANG_ENV
+          value: develop
+        - name: IPFS_API_URL
+          value: http://ipfs:5001/api/v0
+        - name: PORT
+          value: "3400"
+        - name: POSTGRES_DB_URL
+          value: postgres://postgres@postgres/postgres?sslmode=disable
+        - name: POSTMARK_KEY
+          value: POSTMARK_API_TEST
+        - name: PUBLIC_KEY
+          value: nothing_yet
+        - name: REDIS_URL
+          value: redis:6379
+        - name: RPC_PORT
+          value: "4400"
+        - name: TLS
+          value: "false"
+        image: datatogether/task-mgmt:latest
+        name: task-mgmt
+        ports:
+        - containerPort: 3400
+        - containerPort: 4400
+        resources: {}
+      restartPolicy: Always
+status: {}

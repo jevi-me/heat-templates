@@ -1,0 +1,22 @@
+apiVersion: v1
+kind: Service
+metadata:
+  annotations:
+    kompose.cmd: kompose convert -f /Users/imac/Desktop/untitled folder/docker-compose.yml
+    kompose.version: 1.16.0 ()
+  creationTimestamp: null
+  labels:
+    io.kompose.service: task-mgmt
+  name: task-mgmt
+spec:
+  ports:
+  - name: "3400"
+    port: 3400
+    targetPort: 3400
+  - name: "4400"
+    port: 4400
+    targetPort: 4400
+  selector:
+    io.kompose.service: task-mgmt
+status:
+  loadBalancer: {}

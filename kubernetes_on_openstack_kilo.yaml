@@ -459,8 +459,6 @@ resources:
 
   k8s_minion_group:
     type: OS::Heat::ResourceGroup
-    depends_on:
-      - k8s_master
     properties:
       count: { get_param: k8s_minion_count }
       resource_def: 
@@ -687,14 +685,14 @@ outputs:
       Public ip address of the Kubernetes master server.
     value: {get_attr: [k8s_master_floating, ip]}
 
-  log_in_instructions:
+  login_instructions:
     description: >
       To log into the cluster: ssh -i .ssh/<ssh_key_name>.pem centos@<k8s_masterip>. You can attempt log in when it shows ACTIVE below.
     value: {get_attr: [k8s_master, show, status]}
 
-  kubeadm_start_up_instructions:
+  startup_instructions:
     description: >
       IF USING KUBEADM OPTION, perform the following commands to start up cluster:
     value: >
-      mkdir -p $HOME/.kube; sudo cp -i /etc/kubernetes/admin.conf $HOME/.kube/config; sudo chown $(id -u):$(id -g) $HOME/.kube/config; kubectl apply -f "https://cloud.weave.works/k8s/net?k8s-version=$(kubectl version | base64 | tr -d '\\n')";
+      mkdir -p $HOME/.kube; sudo cp -i /etc/kubernetes/admin.conf $HOME/.kube/config; sudo chown $(id -u):$(id -g) $HOME/.kube/config; kubectl apply -f "https://cloud.weave.works/k8s/net?k8s-version=$(kubectl version | base64 | tr -d '\n')";
 
