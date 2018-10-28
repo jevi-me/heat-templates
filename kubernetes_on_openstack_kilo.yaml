@@ -131,7 +131,7 @@ parameters:
     label: Use Kubeadm
     type: boolean
     hidden: false
-    default: false
+    default: True
 
   custom_script_file:
     description: Add the link to a custom script to be run on start up.
@@ -695,5 +695,6 @@ outputs:
   kubeadm_start_up_instructions:
     description: >
       IF USING KUBEADM OPTION, perform the following commands to start up cluster:
-    value: "mkdir -p $HOME/.kube; sudo cp -i /etc/kubernetes/admin.conf $HOME/.kube/config; sudo chown $(id -u):$(id -g) $HOME/.kube/config; kubectl apply -f 'https://cloud.weave.works/k8s/net?k8s-version=$(kubectl version | base64 | tr -d '\\n')';"
+    value: >
+      mkdir -p $HOME/.kube; sudo cp -i /etc/kubernetes/admin.conf $HOME/.kube/config; sudo chown $(id -u):$(id -g) $HOME/.kube/config; kubectl apply -f "https://cloud.weave.works/k8s/net?k8s-version=$(kubectl version | base64 | tr -d '\\n')";
 
