@@ -449,6 +449,9 @@ resources:
 
   k8s_master_vol_attach:
     type: OS::Cinder::VolumeAttachment
+    depends_on:
+      - k8s_master
+      - k8s_minion_vol
     properties:
       instance_uuid: {get_resource: k8s_master}
       volume_id: {get_resource: k8s_master_vol}
