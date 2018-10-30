@@ -1,5 +1,4 @@
 # Kubernetes Cluster on Openstack (Kilo)
-<!-- Repo Badges for: Github Project, Slack, License-->
 
 [![GitHub](https://img.shields.io/badge/project-Data_Together-487b57.svg?style=flat-square)](http://github.com/datatogether)
 [![Slack](https://img.shields.io/badge/slack-Archivers-b44e88.svg?style=flat-square)](https://archivers-slack.herokuapp.com/)
@@ -39,12 +38,12 @@ _Key pairs are ssh credentials which are injected into images when they are laun
 
 
 ### 2. Get the parameters from your Openstack Project
-* Openstack Auth URL : Obtain from Compute > Access & Security > API Access > Download Openstack RC
-* Tenant ID : Obtain from Compute > Access & Security > API Access > Download Openstack RC
-* External Network : See Routers tab for name of the External Network.
+* **Openstack Auth URL** : Obtain from Compute > Access & Security > API Access > Download Openstack RC
+* **Tenant ID** : Obtain from Compute > Access & Security > API Access > Download Openstack RC
+* **External Network** : See Routers tab for name of the External Network.
 
 ### 3. Deploy the Heat Orchestration Template
-* Navigate to Orchestration > Stacks > Launch Stack
+* Navigate to **Orchestration** > **Stacks** > **Launch Stack**
 
 * Select URL as the Template Source, and provide the RAW URL of the heat template. Alternatively, you may copy/paste the contents or upload the file.
 
@@ -52,15 +51,15 @@ _Key pairs are ssh credentials which are injected into images when they are laun
 	- Use the **Openstack Auth URL**, **Tenant ID**, **External Network** and **Key Pair** from above.
 	- You have the option to **Use Kubeadm** to bootstrap the deployment. If used, the latest version of Kubernetes is installed. If it is not used, the latest stable version of the CentOS repository Kubernetes (current at 1.5) is installed. 
 	- You may provide an additional url to a file to run **Custom Scripts** on the master node if needed.
-	- The selected **Image** should be Centos 7 x64-2017-02. [See Customisation section for details]
-	- The **Flavor** selected should ideally at least 2 processes with 6 GB of RAM.
+	- The selected **Image** should be `Centos 7 x64-2017-02`. [See Customisation section for details]
+	- The **Flavor** selected should ideally at least 2 processors with 6 GB of RAM.
 	- You can also choose the number of **Minions** and the **Minion Volume Size**. The Master node's volume is 8GB by default.
-* See the Outputs in the Stack Overview for Master node log in instructions post-deployment. (Orchestration > Stakcs > (Select your stack) > Overview)
+* See the **Outputs** in the Stack Overview for Master node log in instructions post-deployment. (Orchestration > Stakcs > (Select your stack) > Overview)
 
 [See Screenshots](./screenshots)
 
 ## Heat Resources
-Heat template Version: 2015-04-30"
+Heat template Version: 2015-04-30
 
 **Policies and IPs**
 * `k8s_master_floating` - Creates a floating IP address for the master node
@@ -75,4 +74,4 @@ Heat template Version: 2015-04-30"
 
 
 ## Customisation
-If switching to a different image. Change the references to `centos` to the default login, and adjust `yum` to the default package installer. See the functions `packages_install()` and `packages_install_ka()`.
+If switching to a different image, change the references to `centos` to the default login for that image, and adjust `yum` to the default package installer. See the functions `os_inits`, `packages_install()` and `packages_install_ka()` which are image specific in both the master and minion templates, and `kubeadm_script` in the minion template.
