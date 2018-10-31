@@ -724,10 +724,10 @@ resources:
                         ## Update with ip variables for master and nodes
                         my_hn_t=$(hostnamectl --transient)  
                         my_ip=$(ip addr show eth0 | awk '$1 == "inet" {print $2}' | cut -f1 -d/)
-                        echo $my_hn_t=$my_ip >> /var/nfs/cluster_ip_variables
-                        echo $my_ip >> /var/nfs/cluster_ip_only
-                        sed -i 's/k8s/IPVAR/'g /var/nfs/cluster_ip_variables
-                        sed -i 's/-//'g /var/nfs/cluster_ip_variables
+                        echo $my_hn_t=$my_ip >> /mnt/nfs/var/nfs/cluster_ip_variables
+                        echo $my_ip >> /mnt/nfs/var/nfs/cluster_ip_only
+                        sed -i 's/k8s/IPVAR/'g /mnt/nfs/var/nfs/cluster_ip_variables
+                        sed -i 's/-//'g /mnt/nfs/var/nfs/cluster_ip_variables
                         }  
                         with_kubeadm() {
                         kubeadm_script
