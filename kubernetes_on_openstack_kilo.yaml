@@ -411,12 +411,12 @@ resources:
             ## Install Go
             cd /tmp
             curl -sLO https://storage.googleapis.com/golang/go1.11.1.linux-amd64.tar.gz
-            sudo tar -C /usr/local -xvzf go1.11.1.linux-amd64.tar.gz 
+            sudo tar -C /usr/local -xvzf go1.11.1.linux-amd64.tar.gz ~/tmp1
             mkdir -p ~/projects/{bin,pkg,src}
             cat <<EOF > /etc/profile.d/path.sh
             export PATH=$PATH:/usr/local/go/bin
             EOF
-            cat <<EOF > ~/.bash_profile
+            cat <<EOF >> ~/.bash_profile
             export GOBIN="$HOME/projects/bin"
             export GOPATH="$HOME/projects/src"
             EOF
@@ -425,13 +425,13 @@ resources:
             curl -s https://raw.githubusercontent.com/helm/helm/master/scripts/get > get_helm.sh
             chmod 700 get_helm.sh
             ./get_helm.sh
-            kubectl create serviceaccount --namespace kube-system tiller
-            kubectl create clusterrolebinding tiller-cluster-rule --clusterrole=cluster-admin --serviceaccount=kube-system:tiller
-            kubectl patch deploy --namespace kube-system tiller-deploy -p '{"spec":{"template":{"spec":{"serviceAccount":"tiller"}}}}'      
+            sudo -u centos kubectl create serviceaccount --namespace kube-system tiller
+            sudo -u centos kubectl create clusterrolebinding tiller-cluster-rule --clusterrole=cluster-admin --serviceaccount=kube-system:tiller
+            sudo -u centos kubectl patch deploy --namespace kube-system tiller-deploy -p '{"spec":{"template":{"spec":{"serviceAccount":"tiller"}}}}'      
             helm init --service-account tiller --upgrade
             helm repo update  
             helm ls
-            kubectl get pods --namespace kube-system
+            sudo -u centos kubectl get pods --namespace kube-system
             ## Install GlusterFS 
             yum -y install centos-release-gluster41.x86_64 
             yum install glusterfs gluster-cli -y 
@@ -693,12 +693,12 @@ resources:
                         ## Install Go
                         cd /tmp
                         curl -sLO https://storage.googleapis.com/golang/go1.11.1.linux-amd64.tar.gz
-                        sudo tar -C /usr/local -xvzf go1.11.1.linux-amd64.tar.gz 
+                        sudo tar -C /usr/local -xvzf go1.11.1.linux-amd64.tar.gz ~/tmp1
                         mkdir -p ~/projects/{bin,pkg,src}
                         cat <<EOF > /etc/profile.d/path.sh
                         export PATH=$PATH:/usr/local/go/bin
                         EOF
-                        cat <<EOF > ~/.bash_profile
+                        cat <<EOF >> ~/.bash_profile
                         export GOBIN="$HOME/projects/bin"
                         export GOPATH="$HOME/projects/src"
                         EOF
@@ -707,13 +707,13 @@ resources:
                         curl -s https://raw.githubusercontent.com/helm/helm/master/scripts/get > get_helm.sh
                         chmod 700 get_helm.sh
                         ./get_helm.sh
-                        kubectl create serviceaccount --namespace kube-system tiller
-                        kubectl create clusterrolebinding tiller-cluster-rule --clusterrole=cluster-admin --serviceaccount=kube-system:tiller
-                        kubectl patch deploy --namespace kube-system tiller-deploy -p '{"spec":{"template":{"spec":{"serviceAccount":"tiller"}}}}'      
+                        sudo su centos kubectl create serviceaccount --namespace kube-system tiller
+                        sudo su centos kubectl create clusterrolebinding tiller-cluster-rule --clusterrole=cluster-admin --serviceaccount=kube-system:tiller
+                        sudo su centos kubectl patch deploy --namespace kube-system tiller-deploy -p '{"spec":{"template":{"spec":{"serviceAccount":"tiller"}}}}'      
                         helm init --service-account tiller --upgrade
                         helm repo update  
                         helm ls
-                        kubectl get pods --namespace kube-system
+                        sudo su centos kubectl get pods --namespace kube-system
                         ## Install GlusterFS 
                         yum -y install centos-release-gluster41.x86_64 
                         yum install glusterfs gluster-cli -y 
