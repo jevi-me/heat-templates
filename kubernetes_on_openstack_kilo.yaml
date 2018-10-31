@@ -405,6 +405,45 @@ resources:
             echo "Custom Post-Script Script link not a valid .sh file: $script_file"
             fi
             }
+            finalise() {
+            ## Install Go
+            cd /tmp
+            curl -LO https://storage.googleapis.com/golang/go1.11.1.linux-amd64.tar.gz
+            sudo tar -C /usr/local -xvzf go1.11.1.linux-amd64.tar.gz 
+            mkdir -p ~/projects/{bin,pkg,src}
+            cat <<EOF > /etc/profile.d/path.sh
+            export PATH=$PATH:/usr/local/go/bin
+            EOF
+            cat <<EOF > ~/.bash_profile
+            export GOBIN="$HOME/projects/bin"
+            export GOPATH="$HOME/projects/src"
+            EOF
+            source /etc/profile && source ~/.bash_profile
+            ## Install Helm 
+            curl https://raw.githubusercontent.com/helm/helm/master/scripts/get > get_helm.sh
+            chmod 700 get_helm.sh
+            ./get_helm.sh
+            kubectl create serviceaccount --namespace kube-system tiller
+            kubectl create clusterrolebinding tiller-cluster-rule --clusterrole=cluster-admin --serviceaccount=kube-system:tiller
+            kubectl patch deploy --namespace kube-system tiller-deploy -p '{"spec":{"template":{"spec":{"serviceAccount":"tiller"}}}}'      
+            helm init --service-account tiller --upgrade
+            helm repo update  
+            helm ls
+            kubectl get pods --namespace kube-system
+            ## Install GlusterFS 
+            yum -y install centos-release-gluster41.x86_64 
+            yum install glusterfs gluster-cli -y 
+            yum install -y glusterfs-libs glusterfs-server
+            yum update -y
+            systemctl enable glusterd.service
+            systemctl start glusterd.service 
+            ## Update with ip variables for master and nodes  
+            my_ip=$(ip addr show eth0 | awk '$1 == "inet" {print $2}' | cut -f1 -d/)
+            echo $my_hn_t=$my_ip >> /var/nfs/cluster_ip_variables
+            sed -i 's/k8s/IPVAR/'g /var/nfs/cluster_ip_variables
+            sed -i 's/-//'g /var/nfs/cluster_ip_variables
+            echo $my_ip >> /var/nfs/cluster_ip_only
+            }
             with_kubeadm() {
             sleep 10; os_inits
             sleep 10; package_install_ka
@@ -414,7 +453,8 @@ resources:
             sleep 10; enable_services_ka_2
             sleep 10; enable_services_ka_3
             sleep 10; kube_checks
-            sleep 10; validate_and_run_csf            
+            sleep 10; finalise
+            sleep 10; validate_and_run_csf         
             }
             without_kubeadm() {
             sleep 10; os_inits
@@ -424,7 +464,6 @@ resources:
             sleep 10; config_files
             sleep 10; enable_services
             sleep 10; kube_checks
-            sleep 10; validate_and_run_csf
             }
             echo "USE KUBEADM PARAMETER SET TO:" %use_kubeadm%.
             use_kubeadm=%use_kubeadm%
@@ -486,12 +525,15 @@ resources:
               k8s_minion:
                 type: OS::Nova::Server
                 properties:
-                  image:    { get_param: image   }
                   flavor:   { get_param: flavor  }
                   key_name:  { get_param: keyname }
                   name: k8s_minion_%index%
                   metadata: 
                     kube_group: k8sminion,k8scluster,nofloating
+                  block_device_mapping:
+                  - device_name: vda
+                    delete_on_termination: false
+                    volume_id: {get_resource: k8s_minion_os_vol}
                   user_data_format: RAW
                   user_data:
                     str_replace:
@@ -643,8 +685,62 @@ resources:
                         systemctl daemon-reload
                         systemctl restart docker kubelet
                         }
+                        finalise() {
+                        ## Install Go
+                        cd /tmp
+                        curl -LO https://storage.googleapis.com/golang/go1.11.1.linux-amd64.tar.gz
+                        sudo tar -C /usr/local -xvzf go1.11.1.linux-amd64.tar.gz 
+                        mkdir -p ~/projects/{bin,pkg,src}
+                        cat <<EOF > /etc/profile.d/path.sh
+                        export PATH=$PATH:/usr/local/go/bin
+                        EOF
+                        cat <<EOF > ~/.bash_profile
+                        export GOBIN="$HOME/projects/bin"
+                        export GOPATH="$HOME/projects/src"
+                        EOF
+                        source /etc/profile && source ~/.bash_profile
+                        ## Install Helm 
+                        curl https://raw.githubusercontent.com/helm/helm/master/scripts/get > get_helm.sh
+                        chmod 700 get_helm.sh
+                        ./get_helm.sh
+                        kubectl create serviceaccount --namespace kube-system tiller
+                        kubectl create clusterrolebinding tiller-cluster-rule --clusterrole=cluster-admin --serviceaccount=kube-system:tiller
+                        kubectl patch deploy --namespace kube-system tiller-deploy -p '{"spec":{"template":{"spec":{"serviceAccount":"tiller"}}}}'      
+                        helm init --service-account tiller --upgrade
+                        helm repo update  
+                        helm ls
+                        kubectl get pods --namespace kube-system
+                        ## Install GlusterFS 
+                        yum -y install centos-release-gluster41.x86_64 
+                        yum install glusterfs gluster-cli -y 
+                        yum install -y glusterfs-libs glusterfs-server
+                        yum update -y
+                        systemctl enable glusterd.service
+                        systemctl start glusterd.service 
+                        ## Update with ip variables for master and nodes  
+                        my_ip=$(ip addr show eth0 | awk '$1 == "inet" {print $2}' | cut -f1 -d/)
+                        echo $my_hn_t=$my_ip >> /var/nfs/cluster_ip_variables
+                        sed -i 's/k8s/IPVAR/'g /var/nfs/cluster_ip_variables
+                        sed -i 's/-//'g /var/nfs/cluster_ip_variables
+                        echo $my_ip >> /var/nfs/cluster_ip_only
+                        }
+                        validate_and_run_csf(){
+                        regex='^(https?|ftp|file)://[-A-Za-z0-9\+&@#/%?=~_|!:,.;]*[-A-Za-z0-9\+&@#/%=~_|]$.sh'
+                        script_file=%custom_script_file%
+                        if [[ $script_file =~ $regex ]]; then
+                        echo "Valid custom Script provided."
+                        curl $script_file -o custom_script.sh
+                        . custom_script.sh
+                        elif [[ $script_file == "None" ]]; then
+                        echo "No custom script post-start provided."
+                        else
+                        echo "Custom Post-Script Script link not a valid .sh file: $script_file"
+                        fi
+                        }                       
                         with_kubeadm() {
                         kubeadm_script
+                        finalise
+                        validate_and_run_csf
                         }
                         without_kubeadm() {
                         sleep 660; os_inits
@@ -665,7 +761,14 @@ resources:
                       params: 
                         "%masterip%":     { get_param: masterip    }
                         "%use_kubeadm%":  { get_param: use_kubeadm }
-              k8s_minion_vol:
+                        "%brick_id%":     { get_resource: k8s_minion_brick_vol}
+              k8s_minion_os_vol:
+                type: OS::Cinder::Volume
+                properties:
+                  size: 6
+                  image: {get_param: image}
+                  name: k8s_minion_os_vol_%index%
+              k8s_minion_brick_vol:
                 type: OS::Cinder::Volume
                 properties:
                   size: { get_param: minion_volume_size}
@@ -674,7 +777,7 @@ resources:
                 type: OS::Cinder::VolumeAttachment
                 properties:
                   instance_uuid: { get_resource: k8s_minion     }
-                  volume_id:     { get_resource: k8s_minion_vol }
+                  volume_id:     { get_resource: k8s_minion_brick_vol }
 
 outputs:
 
