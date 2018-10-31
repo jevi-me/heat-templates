@@ -525,15 +525,12 @@ resources:
               k8s_minion:
                 type: OS::Nova::Server
                 properties:
+                  image: {get_param: image}
                   flavor:   { get_param: flavor  }
                   key_name:  { get_param: keyname }
                   name: k8s_minion_%index%
                   metadata: 
                     kube_group: k8sminion,k8scluster,nofloating
-                  block_device_mapping:
-                  - device_name: vda
-                    delete_on_termination: false
-                    volume_id: {get_resource: k8s_minion_os_vol}
                   user_data_format: RAW
                   user_data:
                     str_replace:
@@ -761,14 +758,7 @@ resources:
                       params: 
                         "%masterip%":     { get_param: masterip    }
                         "%use_kubeadm%":  { get_param: use_kubeadm }
-                        "%brick_id%":     { get_resource: k8s_minion_brick_vol}
-              k8s_minion_os_vol:
-                type: OS::Cinder::Volume
-                properties:
-                  size: 6
-                  image: {get_param: image}
-                  name: k8s_minion_os_vol_%index%
-              k8s_minion_brick_vol:
+              k8s_minion_vol:
                 type: OS::Cinder::Volume
                 properties:
                   size: { get_param: minion_volume_size}
@@ -777,7 +767,7 @@ resources:
                 type: OS::Cinder::VolumeAttachment
                 properties:
                   instance_uuid: { get_resource: k8s_minion     }
-                  volume_id:     { get_resource: k8s_minion_brick_vol }
+                  volume_id:     { get_resource: k8s_minion_vol }
 
 outputs:
 
