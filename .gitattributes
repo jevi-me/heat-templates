@@ -1,2 +1,6 @@
 # Auto detect text files and perform LF normalization
+<<<<<<< HEAD
 *.yaml linguist-language=YAML
+=======
+* text=auto
+>>>>>>> parent of ebe539b... Update .gitattributes
