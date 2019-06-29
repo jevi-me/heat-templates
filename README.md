@@ -4,9 +4,9 @@
 [![Slack](https://img.shields.io/badge/slack-Archivers-b44e88.svg?style=flat-square)](https://archivers-slack.herokuapp.com/)
 [![License](https://img.shields.io/github/license/mashape/apistatus.svg?style=flat-square)](./LiCENSE)
 
-This **Openstack Heat Template** creates up a Kubernetes cluster on Openstack for[ Data Together](https://datatogether.org) resources. A HEAT Orchestration Template are used for both provisioning and configuration, however, this can be modified, to allow for tools like Ainsible to perform the configuration and/or the provisioning as well. 
+This **Openstack Heat Template** creates up a Kubernetes cluster on Openstack for[ Data Together](https://datatogether.org) resources. A HEAT Orchestration Template is used for both provisioning and configuration, however, this can be modified, to allow for tools like Ainsible to perform the configuration and/or the provisioning as well. 
 
-New features of the Data Together platform are coordinated and developed in one or more of the other repositories listed in our [Roadmap](https://github.com/datatogether/roadmap). 
+New features of the Data Together platform are coordinated and developed in one or more of the other repositories listed in the [Roadmap](https://github.com/datatogether/roadmap). 
 
 
 ![K8s-on-OpenStack](/screenshots/K8s-on-OpenStack.gif)
